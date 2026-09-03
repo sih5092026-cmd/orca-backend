@@ -1,7 +1,4 @@
-const puppeteer = require("puppeteer-core");
-
-const CHROME_PATH =
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const puppeteer = require("puppeteer");
 
 const INCOIS_HOME =
     "https://www.incois.gov.in/MarineFisheries/" +
@@ -862,9 +859,6 @@ async function getPFZData(
 
         browser =
             await puppeteer.launch({
-
-                executablePath:
-                    CHROME_PATH,
 
                 headless: true,
 
