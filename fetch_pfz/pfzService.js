@@ -1,5 +1,4 @@
-const puppeteer = require("puppeteer-core");
-const chromium = require("@sparticuz/chromium");
+const cheerio = require("cheerio");
 
 const INCOIS_HOME =
     "https://www.incois.gov.in/MarineFisheries/" +
@@ -306,77 +305,188 @@ function detectSector(
 
 
 // ============================================================
+// HTTP SESSION FETCH + 6-HOUR CACHE + RETRIES
+// ============================================================
+
+const axios = require("axios");
+const { wrapper } = require("axios-cookiejar-support");
+const { CookieJar } = require("tough-cookie");
+
+const jar = new CookieJar();
+
+const client = wrapper(
+    axios.create({
+        jar,
+        timeout: 20000,
+        headers: {
+            "User-Agent":
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/131.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9"
+        },
+        maxRedirects: 10
+    })
+);
+
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 1000;
+
+// Cache HTML independently for each URL/sector.
+// Parsed zone coordinates are recalculated for each user location.
+const htmlCache = new Map();
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function getHtml(url, referer = null, options = {}) {
+
+    const useCache = options.useCache !== false;
+    const cacheKey = url;
+
+    if (useCache) {
+        const cached = htmlCache.get(cacheKey);
+
+        if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+            console.log(`Cache HIT: ${url}`);
+            return cached.html;
+        }
+
+        if (cached) {
+            htmlCache.delete(cacheKey);
+            console.log(`Cache EXPIRED: ${url}`);
+        }
+    }
+
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const headers = {};
+
+            if (referer) {
+                headers.Referer = referer;
+            }
+
+            console.log(`INCOIS request attempt ${attempt}/${MAX_RETRIES}: ${url}`);
+
+            const response = await client.get(url, { headers });
+
+            if (response.status < 200 || response.status >= 300) {
+                throw new Error(
+                    `INCOIS HTTP request failed for ${url}: ` +
+                    `${response.status} ${response.statusText}`
+                );
+            }
+
+            const html = response.data;
+
+            if (useCache) {
+                htmlCache.set(cacheKey, {
+                    html,
+                    timestamp: Date.now()
+                });
+                console.log(`Cache STORE: ${url}`);
+            }
+
+            return html;
+
+        } catch (error) {
+            lastError = error;
+
+            if (attempt < MAX_RETRIES) {
+                console.warn(
+                    `INCOIS request failed (attempt ${attempt}/${MAX_RETRIES}): ${error.message}`
+                );
+                await sleep(RETRY_DELAY_MS * attempt);
+            }
+        }
+    }
+
+    if (lastError && (lastError.code === "ECONNABORTED" || lastError.code === "ETIMEDOUT")) {
+        throw new Error(
+            `INCOIS HTTP request timed out after 20 seconds (${MAX_RETRIES} attempts): ${url}`
+        );
+    }
+
+    throw new Error(
+        `INCOIS HTTP request failed after ${MAX_RETRIES} attempts for ${url}: ` +
+        `${lastError ? lastError.message : "Unknown error"}`
+    );
+}
+
+// ============================================================
+// TABLE EXTRACTION
+// ============================================================
+
+// ============================================================
+// TABLE EXTRACTION
+// ============================================================
+
+function extractTables(html) {
+
+    const $ = cheerio.load(html);
+
+    return $("table")
+        .map(function () {
+
+            return [
+                $(this)
+                    .find("tr")
+                    .map(function () {
+
+                        return [
+                            $(this)
+                                .find("th, td")
+                                .map(function () {
+                                    return $(this)
+                                        .text()
+                                        .replace(/\s+/g, " ")
+                                        .trim();
+                                })
+                                .get()
+                        ];
+                    })
+                    .get()
+            ];
+        })
+        .get();
+}
+
+
+// ============================================================
 // DISCOVER SEC IDs
 // ============================================================
 
-async function discoverSectorIds(page) {
+async function discoverSectorIds(html) {
 
     console.log(
         "\nDiscovering INCOIS PFZ sectors..."
     );
 
+    const $ = cheerio.load(html);
 
-    await page.goto(
-        INCOIS_HOME,
-        {
-            waitUntil: "domcontentloaded",
-            timeout: 60000
-        }
-    );
+    const result = [];
 
+    $("select option").each(function () {
 
-    await new Promise(
-        resolve => setTimeout(resolve, 2000)
-    );
+        result.push({
 
+            text:
+                $(this)
+                    .text()
+                    .replace(/\s+/g, " ")
+                    .trim(),
 
-    const result =
-        await page.evaluate(() => {
-
-            const output = [];
-
-
-            const selects =
-                Array.from(
-                    document.querySelectorAll("select")
-                );
-
-
-            for (
-                const select of selects
-            ) {
-
-                const options =
-                    Array.from(
-                        select.options
-                    );
-
-
-                for (
-                    const option of options
-                ) {
-
-                    output.push({
-
-                        text:
-                            option.textContent
-                                .replace(/\s+/g, " ")
-                                .trim(),
-
-                        value:
-                            option.value
-                                .trim()
-                    });
-                }
-            }
-
-
-            return output;
+            value:
+                String($(this).attr("value") || "")
+                    .trim()
         });
-
+    });
 
     const mapping = {};
-
 
     for (
         const item of result
@@ -387,10 +497,8 @@ async function discoverSectorIds(page) {
                 item.text
             );
 
-
         let value =
             item.value;
-
 
         // ====================================================
         // IMPORTANT FIX
@@ -409,13 +517,11 @@ async function discoverSectorIds(page) {
                 /[?&]secid=(SEC\d+)/i
             );
 
-
         if (secMatch) {
 
             value =
                 secMatch[1].toUpperCase();
         }
-
 
         if (
             name &&
@@ -426,7 +532,6 @@ async function discoverSectorIds(page) {
                 value;
         }
     }
-
 
     console.log(
         "\n========================================"
@@ -440,9 +545,7 @@ async function discoverSectorIds(page) {
         "========================================"
     );
 
-
     console.table(mapping);
-
 
     return mapping;
 }
@@ -464,7 +567,6 @@ function findPFZTable(tables) {
                 .join(" ")
                 .toLowerCase();
 
-
         if (
             text.includes("from the coast") &&
             text.includes("direction") &&
@@ -477,8 +579,130 @@ function findPFZTable(tables) {
         }
     }
 
-
     return null;
+}
+
+
+// ============================================================
+// FORECAST DATE / VALID UPTO
+// ============================================================
+
+function extractForecastDates(html) {
+
+    const $ = cheerio.load(html);
+
+    const rows =
+        $("tr")
+            .map(function () {
+
+                return [
+                    $(this)
+                        .find("th, td")
+                        .map(function () {
+                            return $(this)
+                                .text()
+                                .replace(/\s+/g, " ")
+                                .trim();
+                        })
+                        .get()
+                ];
+            })
+            .get();
+
+    let forecast_date = null;
+    let valid_upto = null;
+
+    const datePattern =
+        /^\d{1,2}\s+[A-Z]{3}\s+\d{4}$/i;
+
+    for (
+        let rowIndex = 0;
+        rowIndex < rows.length;
+        rowIndex++
+    ) {
+
+        const row = rows[rowIndex];
+
+        for (
+            let cellIndex = 0;
+            cellIndex < row.length;
+            cellIndex++
+        ) {
+
+            const label =
+                row[cellIndex]
+                    .replace(/\s+/g, " ")
+                    .trim()
+                    .toLowerCase();
+
+            if (
+                label.includes("forecast date") &&
+                !forecast_date
+            ) {
+
+                const sameRowValue =
+                    row[cellIndex + 1];
+
+                if (
+                    sameRowValue &&
+                    datePattern.test(sameRowValue)
+                ) {
+                    forecast_date = sameRowValue;
+                    continue;
+                }
+
+                const nextRow =
+                    rows[rowIndex + 1];
+
+                const nextRowValue =
+                    nextRow &&
+                    nextRow[cellIndex];
+
+                if (
+                    nextRowValue &&
+                    datePattern.test(nextRowValue)
+                ) {
+                    forecast_date = nextRowValue;
+                }
+            }
+
+            if (
+                label.includes("valid upto") &&
+                !valid_upto
+            ) {
+
+                const sameRowValue =
+                    row[cellIndex + 1];
+
+                if (
+                    sameRowValue &&
+                    datePattern.test(sameRowValue)
+                ) {
+                    valid_upto = sameRowValue;
+                    continue;
+                }
+
+                const nextRow =
+                    rows[rowIndex + 1];
+
+                const nextRowValue =
+                    nextRow &&
+                    nextRow[cellIndex];
+
+                if (
+                    nextRowValue &&
+                    datePattern.test(nextRowValue)
+                ) {
+                    valid_upto = nextRowValue;
+                }
+            }
+        }
+    }
+
+    return {
+        forecast_date,
+        valid_upto
+    };
 }
 
 
@@ -487,7 +711,6 @@ function findPFZTable(tables) {
 // ============================================================
 
 async function fetchSector(
-    page,
     sector,
     secid,
     userLatitude,
@@ -497,7 +720,6 @@ async function fetchSector(
     const url =
         `${INCOIS_TEXT}?secid=${secid}`;
 
-
     console.log(
         `\nFetching ${sector}`
     );
@@ -506,76 +728,22 @@ async function fetchSector(
         `SEC ID: ${secid}`
     );
 
+    const html =
+        await getHtml(url, INCOIS_HOME);
 
-    await page.goto(
-        url,
-        {
-            waitUntil: "domcontentloaded",
-            timeout: 60000
-        }
-    );
-
-
-    await new Promise(
-        resolve => setTimeout(resolve, 2500)
-    );
-
-
-    const data =
-        await page.evaluate(() => {
-
-            const tables =
-                Array.from(
-                    document.querySelectorAll("table")
-                );
-
-
-            return {
-
-                body:
-                    document.body.innerText,
-
-                tables:
-                    tables.map(
-                        table => {
-
-                            const rows =
-                                Array.from(
-                                    table.querySelectorAll("tr")
-                                );
-
-
-                            return rows.map(
-                                row =>
-                                    Array.from(
-                                        row.querySelectorAll(
-                                            "th, td"
-                                        )
-                                    ).map(
-                                        cell =>
-                                            cell.innerText
-                                                .replace(/\s+/g, " ")
-                                                .trim()
-                                    )
-                            );
-                        }
-                    )
-            };
-        });
-
+    const tables =
+        extractTables(html);
 
     const table =
         findPFZTable(
-            data.tables
+            tables
         );
-
 
     if (!table) {
 
         console.log(
             `No PFZ table for ${sector}`
         );
-
 
         return {
 
@@ -589,14 +757,11 @@ async function fetchSector(
         };
     }
 
-
     console.log(
         `PFZ table found for ${sector}`
     );
 
-
     const zones = [];
-
 
     for (
         const row of table
@@ -606,9 +771,9 @@ async function fetchSector(
             continue;
         }
 
-
         if (
-            row[0]
+            row
+                .join(" ")
                 .toLowerCase()
                 .includes(
                     "from the coast"
@@ -617,18 +782,15 @@ async function fetchSector(
             continue;
         }
 
-
         const latitude =
             dmsToDecimal(
                 row[5]
             );
 
-
         const longitude =
             dmsToDecimal(
                 row[6]
             );
-
 
         if (
             latitude === null ||
@@ -637,21 +799,17 @@ async function fetchSector(
             continue;
         }
 
-
         const distance =
             parseRange(row[3]);
 
-
         const depth =
             parseRange(row[4]);
-
 
         const bearing =
             Number(
                 row[2]
                     .replace(/[^\d.-]/g, "")
             );
-
 
         zones.push({
 
@@ -732,13 +890,11 @@ async function fetchSector(
         });
     }
 
-
     zones.sort(
         (a, b) =>
             a.distance_from_user_km -
             b.distance_from_user_km
     );
-
 
     if (zones.length > 0) {
 
@@ -746,23 +902,8 @@ async function fetchSector(
             true;
     }
 
-
-    const body =
-        data.body
-            .replace(/\s+/g, " ");
-
-
-    const forecastMatch =
-        body.match(
-            /FORECAST\s*DATE\s+(\d{1,2}\s+[A-Z]{3}\s+\d{4})/i
-        );
-
-
-    const validMatch =
-        body.match(
-            /VALID\s+UPTO\s+(\d{1,2}\s+[A-Z]{3}\s+\d{4})/i
-        );
-
+    const dates =
+        extractForecastDates(html);
 
     return {
 
@@ -770,14 +911,10 @@ async function fetchSector(
             zones.length > 0,
 
         forecast_date:
-            forecastMatch
-                ? forecastMatch[1]
-                : null,
+            dates.forecast_date,
 
         valid_upto:
-            validMatch
-                ? validMatch[1]
-                : null,
+            dates.valid_upto,
 
         zones
     };
@@ -792,9 +929,6 @@ async function getPFZData(
     latitude,
     longitude
 ) {
-
-    let browser = null;
-
 
     try {
 
@@ -855,86 +989,15 @@ async function getPFZData(
 
 
         // ----------------------------------------------------
-        // Start Chrome
-        //
-        // Render sets RENDER=true automatically. On Render we
-        // use the lightweight @sparticuz/chromium build. When
-        // running locally (Mac/Windows/Linux dev machine), we
-        // use the system-installed Chrome instead, since the
-        // sparticuz binary only runs on Linux.
+        // Fetch INCOIS home page and discover sector IDs
         // ----------------------------------------------------
 
-        const isRender =
-            !!process.env.RENDER;
-
-        let executablePath;
-        let launchArgs;
-
-        if (isRender) {
-
-            executablePath =
-                await chromium.executablePath();
-
-            launchArgs = [
-                ...chromium.args,
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--single-process",
-                "--disable-gpu"
-            ];
-
-        } else {
-
-            executablePath =
-                process.platform === "darwin"
-                    ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-                    : process.platform === "win32"
-                        ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-                        : "/usr/bin/google-chrome";
-
-            launchArgs = [
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage"
-            ];
-        }
-
-
-        browser =
-            await puppeteer.launch({
-
-                executablePath,
-
-                args: launchArgs,
-
-                headless: true,
-
-                defaultViewport:
-                    isRender
-                        ? chromium.defaultViewport
-                        : null,
-            });
-
-
-        const page =
-            await browser.newPage();
-
-
-        await page.setUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-            "AppleWebKit/537.36 (KHTML, like Gecko) " +
-            "Chrome/142.0.0.0 Safari/537.36"
-        );
-
-
-        // ----------------------------------------------------
-        // Discover sector IDs
-        // ----------------------------------------------------
+        const homeHtml =
+            await getHtml(INCOIS_HOME);
 
         const sectorIds =
             await discoverSectorIds(
-                page
+                homeHtml
             );
 
 
@@ -963,7 +1026,6 @@ async function getPFZData(
 
         const result =
             await fetchSector(
-                page,
                 sector,
                 secid,
                 latitude,
@@ -1026,14 +1088,6 @@ async function getPFZData(
                 error.message
         };
 
-
-    } finally {
-
-        if (browser) {
-
-            await browser.close();
-
-        }
     }
 }
 
