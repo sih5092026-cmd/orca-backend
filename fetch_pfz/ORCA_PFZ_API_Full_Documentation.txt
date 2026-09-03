@@ -1,0 +1,1692 @@
+ORCA — PFZ API
+FULL TECHNICAL DOCUMENTATION
+SIH26176 — Marine EcOsystem Reasoning with Collaborative Agents
+===============================================================
+
+Document purpose
+----------------
+This document is a developer handoff/reference for the ORCA PFZ API.
+
+It explains:
+- What the PFZ API does
+- API URL and endpoints
+- Request parameters
+- Complete response structure
+- Sector detection
+- INCOIS integration
+- SEC ID discovery
+- PFZ table scraping
+- Coordinate conversion
+- Range parsing
+- Distance calculation
+- Candidate-zone generation
+- Recommendation logic
+- Validation
+- Error behavior
+- Current test status
+- What is complete
+- What is still left to implement
+
+IMPORTANT SCOPE NOTE
+--------------------
+This document describes the current PFZ implementation only.
+
+PFZ = Potential Fishing Zone.
+
+The current implementation obtains PFZ advisory/table information from INCOIS using
+Puppeteer and transforms the table into a JSON response suitable for the ORCA frontend
+and future ORCA decision-support agents.
+
+It is NOT yet a complete scientific PFZ prediction model. Several environmental fields
+and scoring functions are placeholders and are listed in the "STILL LEFT" section.
+
+
+1. SYSTEM OVERVIEW
+==================
+
+The PFZ service has two main files:
+
+1. server(1).js
+   - Express API server
+   - Receives latitude/longitude from the client
+   - Validates coordinates
+   - Calls getPFZData()
+   - Returns JSON
+
+2. pfzService.js
+   - Core PFZ logic
+   - Detects the Indian coastal sector
+   - Opens INCOIS
+   - Discovers the sector SEC ID
+   - Scrapes the PFZ table
+   - Converts coordinates
+   - Parses distance/depth ranges
+   - Calculates distance from the requested location
+   - Creates candidate PFZ zones
+   - Selects the nearest candidate as "recommended"
+
+Runtime:
+- Node.js
+- Express
+- CORS
+- Puppeteer Core
+- Google Chrome installed locally
+
+The API currently runs on:
+http://localhost:3005
+
+
+2. API ENDPOINTS
+================
+
+2.1 Health check
+
+METHOD:
+GET
+
+URL:
+http://localhost:3005/
+
+Example:
+http://localhost:3005/
+
+Response:
+
+{
+  "success": true,
+  "service": "ORCA PFZ API",
+  "status": "running"
+}
+
+
+2.2 PFZ data endpoint
+
+METHOD:
+GET
+
+URL:
+http://localhost:3005/api/pfz
+
+Required query parameters:
+- latitude
+- longitude
+
+Example:
+http://localhost:3005/api/pfz?latitude=15.49&longitude=73.83
+
+The server converts both query parameters to JavaScript numbers:
+
+Number(req.query.latitude)
+Number(req.query.longitude)
+
+
+3. INPUT VALIDATION
+===================
+
+The API now validates both numeric format and geographic coordinate limits.
+
+Current validation:
+
+if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    longitude < -180 ||
+    longitude > 180
+) {
+    return res.status(400).json({
+        success: false,
+        error: "Invalid latitude or longitude"
+    });
+}
+
+Allowed ranges:
+- Latitude: -90 to +90
+- Longitude: -180 to +180
+
+Examples:
+
+Valid:
+latitude=19.076
+longitude=72.8777
+
+Invalid:
+latitude=999
+longitude=72.5
+
+Invalid:
+latitude=19
+longitude=999
+
+Invalid:
+latitude=abc
+longitude=72.5
+
+Expected invalid response:
+
+HTTP 400
+
+{
+  "success": false,
+  "error": "Invalid latitude or longitude"
+}
+
+This validation was added because the previous implementation accepted a finite
+but geographically impossible latitude such as 999.
+
+
+4. REQUEST FLOW
+===============
+
+The complete request flow is:
+
+Client
+  |
+  | GET /api/pfz?latitude=...&longitude=...
+  v
+server(1).js
+  |
+  | Parse coordinates
+  v
+Coordinate validation
+  |
+  | valid
+  v
+getPFZData(latitude, longitude)
+  |
+  v
+detectSector()
+  |
+  +---- no sector ----> available=false
+  |
+  +---- sector found
+             |
+             v
+       Launch Chrome
+             |
+             v
+       Open INCOIS home
+             |
+             v
+       Discover SEC ID
+             |
+             v
+       Open sector TextData page
+             |
+             v
+       Find PFZ table
+             |
+             v
+       Parse table rows
+             |
+             v
+       Convert DMS coordinates
+             |
+             v
+       Parse distance/depth
+             |
+             v
+       Calculate user-to-PFZ distance
+             |
+             v
+       Sort candidate zones
+             |
+             v
+       Mark nearest zone recommended
+             |
+             v
+       Return JSON
+
+
+5. INCOIS DATA SOURCE
+=====================
+
+The current PFZ service uses INCOIS Marine Fisheries pages.
+
+INCOIS home page used by the service:
+
+https://www.incois.gov.in/MarineFisheries/TextDataHome?mfid=1&request_locale=en
+
+Text-data base URL:
+
+https://www.incois.gov.in/MarineFisheries/TextData
+
+The service uses Puppeteer to open the INCOIS website through a real/local Chrome
+browser because the current workflow depends on the rendered web page.
+
+
+6. BROWSER REQUIREMENT
+======================
+
+pfzService.js currently uses puppeteer-core.
+
+Chrome path is hard-coded as:
+
+C:\Program Files\Google\Chrome\Application\chrome.exe
+
+The service launches Chrome in headless mode.
+
+Current launch arguments include:
+- --no-sandbox
+- --disable-setuid-sandbox
+- --disable-dev-shm-usage
+
+This means the machine running the PFZ API must have Chrome installed at the
+configured path, or CHROME_PATH must be changed.
+
+
+7. COASTAL SECTOR DETECTION
+===========================
+
+The API does not send the latitude/longitude directly to INCOIS to determine
+the sector.
+
+Instead, pfzService.js first runs detectSector(latitude, longitude).
+
+The sector is selected using configured rectangular latitude/longitude bounding
+boxes.
+
+Configured sectors:
+
+1. GUJARAT
+2. MAHARASHTRA
+3. GOA
+4. KARNATAKA
+5. KERALA
+6. SOUTH TAMILNADU
+7. NORTH TAMILNADU
+8. SOUTH ANDHRA PRADESH
+9. NORTH ANDHRA PRADESH
+10. ODISHA
+11. WEST BENGAL
+12. LAKSHADWEEP
+13. ANDAMAN
+14. NICOBAR
+
+Current important bounding-box examples:
+
+Gujarat:
+latitude >= 20
+longitude >= 68
+longitude < 72.8
+
+Maharashtra:
+latitude >= 15.5
+latitude < 20.5
+longitude >= 72.5
+longitude < 74.2
+
+Goa:
+latitude >= 14.7
+latitude < 16.0
+longitude >= 73.4
+longitude < 74.5
+
+Karnataka:
+latitude >= 11.5
+latitude < 15.2
+longitude >= 73.5
+longitude < 75.5
+
+Kerala:
+latitude >= 8.0
+latitude < 12.8
+longitude >= 74.5
+longitude < 77.5
+
+South Tamil Nadu:
+latitude >= 8.0
+latitude < 10.8
+longitude >= 77
+longitude <= 80.5
+
+North Tamil Nadu:
+latitude >= 10.0
+latitude < 13.7
+longitude >= 79.3
+longitude <= 81.5
+
+South Andhra Pradesh:
+latitude >= 12.5
+latitude < 15.5
+longitude >= 79.5
+longitude <= 82.5
+
+North Andhra Pradesh:
+latitude >= 14.5
+latitude < 18.5
+longitude >= 81
+longitude <= 84.5
+
+Odisha:
+latitude >= 17.5
+latitude < 22.5
+longitude >= 81.5
+longitude <= 87.5
+
+West Bengal:
+latitude >= 21
+latitude <= 23
+longitude >= 87
+longitude <= 89
+
+Lakshadweep:
+latitude >= 8
+latitude <= 13.5
+longitude >= 70
+longitude <= 75.5
+
+Andaman:
+latitude >= 10
+latitude <= 14.5
+longitude >= 92
+longitude <= 94
+
+Nicobar:
+latitude >= 6
+latitude < 10
+longitude >= 92
+longitude <= 94.5
+
+IMPORTANT:
+These are rectangular software rules, not official administrative/coastal boundaries.
+A coordinate can fall inside a configured rectangle even if it is not physically
+inside the corresponding coastal/marine region.
+
+The API currently relies on first-match behavior when rectangles overlap.
+
+
+8. SEC ID DISCOVERY
+===================
+
+INCOIS uses sector IDs such as:
+
+SEC001
+SEC002
+SEC003
+...
+
+The PFZ service does not permanently assume that a sector always has a specific ID.
+
+Instead, discoverSectorIds(page) opens the INCOIS PFZ home page and reads the
+available sector options.
+
+The implementation:
+1. Opens INCOIS_HOME
+2. Waits for network activity to settle
+3. Reads the sector <select> options
+4. Normalizes sector names
+5. Extracts SEC IDs from option URLs
+6. Builds a mapping:
+
+sector name -> SEC ID
+
+Example from current testing:
+
+GUJARAT -> SEC001
+MAHARASHTRA -> SEC002
+GOA -> SEC003
+KARNATAKA -> SEC004
+KERALA -> SEC005
+SOUTH TAMILNADU -> SEC006
+NORTH TAMILNADU -> SEC007
+SOUTH ANDHRA PRADESH -> SEC008
+NORTH ANDHRA PRADESH -> SEC009
+ODISHA -> SEC010
+WEST BENGAL -> SEC011
+ANDAMAN -> SEC012
+NICOBAR -> SEC013
+LAKSHADWEEP -> SEC014
+
+The mapping is discovered dynamically rather than being the only source of truth.
+
+
+9. SECTOR PAGE FETCH
+====================
+
+After sector detection and SEC ID discovery, the service calls fetchSector().
+
+The sector page is loaded using the SEC ID.
+
+Conceptually:
+
+TextData?secid=SEC_ID
+
+Example:
+
+https://www.incois.gov.in/MarineFisheries/TextData?secid=SEC003
+
+The page is loaded with Puppeteer.
+
+The service waits for:
+- networkidle2
+- an additional short delay
+
+The extra wait is used because the PFZ page may need time to render its table.
+
+
+10. PFZ TABLE DETECTION
+=======================
+
+The service searches the rendered page for a table whose text contains all of
+these key phrases:
+
+"from the coast"
+"direction"
+"bearing"
+"latitude"
+"longitude"
+
+This is used to identify the PFZ advisory table rather than assuming a fixed
+HTML table index.
+
+
+11. TABLE ROW MAPPING
+=====================
+
+Each valid PFZ row is expected to have at least 7 columns.
+
+The current mapping is:
+
+Column 0:
+coastal_reference
+
+Column 1:
+direction
+
+Column 2:
+bearing
+
+Column 3:
+distance range
+
+Column 4:
+depth range
+
+Column 5:
+latitude
+
+Column 6:
+longitude
+
+Rows with fewer than 7 columns are skipped.
+
+Header-like rows containing "from the coast" are skipped.
+
+
+12. COORDINATE CONVERSION
+=========================
+
+INCOIS PFZ coordinates can be supplied in DMS format.
+
+Example concept:
+
+15 29 24 N
+073 49 48 E
+
+The service converts DMS to decimal degrees.
+
+Formula:
+
+decimal =
+    degrees
+    + minutes / 60
+    + seconds / 3600
+
+For S or W:
+decimal = -decimal
+
+The result is rounded to 6 decimal places.
+
+Supported direction suffixes:
+- N
+- S
+- E
+- W
+
+If a coordinate cannot be parsed, the row is skipped.
+
+
+13. DISTANCE RANGE PARSING
+==========================
+
+The service parses textual distance ranges.
+
+Example:
+
+"20 - 30 km"
+
+The parser extracts:
+
+min = 20
+max = 30
+
+The response stores:
+- distance_range_km = original/raw text
+- distance_min_km = minimum numeric value
+- distance_max_km = maximum numeric value
+
+If a range cannot be parsed:
+- min = null
+- max = null
+- raw = original text or null
+
+
+14. DEPTH RANGE PARSING
+=======================
+
+Depth is processed using the same range parser.
+
+Example:
+
+"50 - 100 m"
+
+The response stores:
+- depth_range_m
+- depth_min_m
+- depth_max_m
+
+If the range does not match the expected numeric "min - max" pattern,
+min/max are null but the raw text is preserved when available.
+
+
+15. BEARING
+===========
+
+Bearing is extracted from the bearing column.
+
+Non-numeric characters are removed.
+
+The resulting number is stored as:
+
+bearing_deg
+
+If the bearing cannot be converted to a finite number, it becomes null.
+
+
+16. DISTANCE FROM USER
+=====================
+
+The service calculates the geographic distance between:
+
+User location:
+(userLatitude, userLongitude)
+
+and PFZ candidate:
+(latitude, longitude)
+
+The implementation uses the Haversine formula.
+
+Earth radius:
+6371 km
+
+Output:
+distance_from_user_km
+
+The result is rounded to 2 decimal places.
+
+
+17. CANDIDATE PFZ ZONE OBJECT
+============================
+
+Each parsed row becomes one candidate zone.
+
+Current structure:
+
+{
+  "zone_id": "PFZ-001",
+  "coastal_reference": "...",
+  "direction": "...",
+  "bearing_deg": 123,
+  "distance_range_km": "...",
+  "distance_min_km": 10,
+  "distance_max_km": 20,
+  "depth_range_m": "...",
+  "depth_min_m": 30,
+  "depth_max_m": 50,
+  "latitude": 15.123456,
+  "longitude": 73.123456,
+  "distance_from_user_km": 25.42,
+  "pfz_confidence": null,
+  "suitability_score": null,
+  "sst_c": null,
+  "chlorophyll_mg_m3": null,
+  "sst_gradient": null,
+  "chlorophyll_gradient": null,
+  "front_present": null,
+  "potential_fish_aggregation": true,
+  "recommended": false
+}
+
+
+18. ZONE ID
+===========
+
+The current zone ID is generated by ORCA.
+
+Format:
+
+PFZ-001
+PFZ-002
+PFZ-003
+...
+
+This is NOT an official INCOIS PFZ identifier.
+
+It is an ORCA internal identifier created from the row order.
+
+
+19. AVAILABLE FLAG
+==================
+
+The response contains:
+
+available
+
+Logic:
+
+available = zones.length > 0
+
+Therefore:
+- true = at least one PFZ candidate was extracted
+- false = no candidate zone was extracted
+
+IMPORTANT:
+available=false does not automatically mean that the location is unsafe for fishing.
+
+It can mean:
+- INCOIS has no PFZ table/candidates for the current sector
+- The current advisory has no usable rows
+- The parser did not find usable rows
+- The location is outside the configured sectors
+
+
+20. RECOMMENDED FLAG
+====================
+
+Current logic:
+
+1. All candidate zones are sorted by distance_from_user_km.
+2. The nearest candidate is assigned:
+
+recommended = true
+
+3. All other candidates remain:
+
+recommended = false
+
+IMPORTANT SCIENTIFIC LIMITATION:
+
+"recommended" currently means:
+NEAREST EXTRACTED PFZ CANDIDATE
+
+It does NOT mean:
+- highest fish probability
+- highest PFZ confidence
+- best SST condition
+- best chlorophyll condition
+- safest fishing location
+- best weather
+- best ocean condition
+- best route
+
+This must be improved before using the field as the final ORCA decision.
+
+
+21. CURRENT ENVIRONMENTAL FIELDS
+================================
+
+The following fields currently exist in the API schema but are not yet populated:
+
+pfz_confidence:
+null
+
+suitability_score:
+null
+
+sst_c:
+null
+
+chlorophyll_mg_m3:
+null
+
+sst_gradient:
+null
+
+chlorophyll_gradient:
+null
+
+front_present:
+null
+
+These fields are placeholders for future integration with marine/environmental
+data and ORCA reasoning.
+
+
+22. POTENTIAL FISH AGGREGATION
+=============================
+
+Current value:
+
+potential_fish_aggregation: true
+
+This is hard-coded.
+
+Therefore it should NOT currently be interpreted as an independently calculated
+scientific prediction.
+
+It should be changed later to a data-driven or agent-derived value.
+
+
+23. FORECAST DATE
+=================
+
+The service attempts to extract forecast_date from the rendered page body.
+
+Current regular expression:
+
+/FORECAST\s*DATE\s+(\d{1,2}\s+[A-Z]{3}\s+\d{4})/i
+
+Expected concept:
+
+FORECAST DATE 01 SEP 2026
+
+The service returns the captured date if the pattern is found.
+
+CURRENT STATUS:
+forecast_date has been observed as null in the multi-location API testing.
+
+Therefore date extraction is NOT considered complete.
+
+
+24. VALID-UPTO DATE
+===================
+
+The service also attempts to extract valid_upto.
+
+Current regular expression:
+
+/VALID\s+UPTO\s+(\d{1,2}\s+[A-Z]{3}\s+\d{4})/i
+
+CURRENT STATUS:
+valid_upto has been observed as null in the multi-location API testing.
+
+Therefore valid-up-to extraction is NOT considered complete.
+
+The source page formatting should be inspected and the parser should be updated
+to match the actual rendered text.
+
+
+25. FINAL API RESPONSE
+=====================
+
+For a successful request inside a configured sector:
+
+{
+  "success": true,
+  "location": {
+    "latitude": 15.49,
+    "longitude": 73.83
+  },
+  "pfz": {
+    "available": true,
+    "source": "INCOIS PFZ",
+    "sector": "GOA",
+    "secid": "SEC003",
+    "forecast_date": null,
+    "valid_upto": null,
+    "candidate_zones": [
+      {
+        "zone_id": "PFZ-001",
+        "coastal_reference": "...",
+        "direction": "...",
+        "bearing_deg": 123,
+        "distance_range_km": "...",
+        "distance_min_km": 10,
+        "distance_max_km": 20,
+        "depth_range_m": "...",
+        "depth_min_m": 30,
+        "depth_max_m": 50,
+        "latitude": 15.123456,
+        "longitude": 73.123456,
+        "distance_from_user_km": 25.42,
+        "pfz_confidence": null,
+        "suitability_score": null,
+        "sst_c": null,
+        "chlorophyll_mg_m3": null,
+        "sst_gradient": null,
+        "chlorophyll_gradient": null,
+        "front_present": null,
+        "potential_fish_aggregation": true,
+        "recommended": true
+      }
+    ]
+  }
+}
+
+
+26. LOCATION OUTSIDE CONFIGURED SECTORS
+=======================================
+
+If detectSector() returns null:
+
+{
+  "success": true,
+  "location": {
+    "latitude": 6.0,
+    "longitude": 80.5
+  },
+  "pfz": {
+    "available": false,
+    "source": "INCOIS PFZ",
+    "sector": null,
+    "secid": null,
+    "forecast_date": null,
+    "valid_upto": null,
+    "candidate_zones": [],
+    "error": "Location is outside configured Indian coastal PFZ sectors."
+  }
+}
+
+The HTTP request itself can still be successful because the API successfully
+processed the request; "available=false" describes PFZ availability, not HTTP failure.
+
+
+27. SCRAPING/PROCESSING ERROR
+=============================
+
+If the PFZ service encounters an exception, getPFZData() catches it and returns:
+
+{
+  "available": false,
+  "source": "INCOIS PFZ",
+  "sector": null,
+  "secid": null,
+  "forecast_date": null,
+  "valid_upto": null,
+  "candidate_zones": [],
+  "error": "..."
+}
+
+At the API-server level, unexpected route errors are returned with HTTP 500.
+
+
+28. CURRENT TESTING RESULTS
+===========================
+
+A multi-location test was performed against:
+
+http://localhost:3005/api/pfz
+
+22 test locations were used.
+
+Tested sectors included:
+- Gujarat
+- Maharashtra
+- Goa
+- Karnataka
+- Kerala
+- South Tamil Nadu
+- North Tamil Nadu
+- South Andhra Pradesh
+- North Andhra Pradesh
+- Odisha
+- West Bengal
+- Lakshadweep
+- Andaman
+- Nicobar
+
+Additional tests included:
+- Mumbai offshore
+- Goa offshore
+- Chennai offshore
+- Andaman offshore
+- Sri Lanka
+- Arabian Sea
+- invalid latitude
+- invalid longitude
+
+
+29. OBSERVED TEST RESULTS
+=========================
+
+Gujarat:
+- sector detected: GUJARAT
+- SEC001
+- available=false
+- 0 candidates
+
+Maharashtra:
+- SEC002
+- available=true
+- 100 candidates
+
+Goa:
+- SEC003
+- available=true
+- 7 candidates
+
+Karnataka:
+- SEC004
+- available=true
+- 16 candidates
+
+Kerala:
+- SEC005
+- available=true
+- 110 candidates
+
+South Tamil Nadu:
+- SEC006
+- available=false
+- 0 candidates
+
+North Tamil Nadu:
+- SEC007
+- available=true
+- 80 candidates
+
+South Andhra Pradesh:
+- SEC008
+- available=true
+- 14 candidates
+
+North Andhra Pradesh:
+- SEC009
+- available=true
+- 14 candidates
+
+Odisha:
+- SEC010
+- available=true
+- 50 candidates
+
+West Bengal:
+- SEC011
+- available=true
+- 4 candidates
+
+Lakshadweep:
+- SEC014
+- available=true
+- 8 candidates
+
+Andaman:
+- SEC012
+- available=true
+- 20 candidates
+
+Nicobar:
+- SEC013
+- available=true
+- 14 candidates
+
+Mumbai offshore:
+- SEC002
+- available=true
+- 100 candidates
+
+Goa offshore:
+- SEC003
+- available=true
+- 7 candidates
+
+Chennai offshore:
+- SEC007
+- available=true
+- 80 candidates
+
+Andaman offshore:
+- SEC012
+- available=true
+- 20 candidates
+
+Sri Lanka:
+- outside configured Indian PFZ sectors
+
+Arabian Sea:
+- outside configured Indian PFZ sectors
+
+Invalid latitude:
+latitude=999
+longitude=72.5
+
+This previously exposed a bug because the old route validation only checked whether
+the numbers were finite. It has now been fixed at the API route level using geographic
+latitude/longitude bounds.
+
+Invalid longitude:
+latitude=19
+longitude=999
+
+This is now rejected by the route-level validation.
+
+
+30. INTERPRETING THE TEST RESULTS
+=================================
+
+The scraper itself is working across many sectors because it successfully:
+- detects sectors
+- discovers SEC IDs
+- opens sector pages
+- extracts PFZ tables
+- generates candidate zones
+
+A sector with zero candidates is not automatically a software bug.
+
+For example:
+- Gujarat returned no candidate rows
+- South Tamil Nadu returned no candidate rows
+
+Possible interpretation:
+- the current INCOIS sector page did not provide usable PFZ rows
+- the current advisory may not contain a matching table
+- no PFZ candidates were available in that response
+
+These should be distinguished from actual API errors.
+
+
+31. IMPORTANT LIMITATIONS OF SECTOR DETECTION
+=============================================
+
+The sector detector is currently based on hard-coded rectangles.
+
+It is NOT:
+- coastline geometry
+- marine polygon
+- official administrative boundary
+- EEZ geometry
+- GIS point-in-polygon
+- nearest coastal station calculation
+
+Potential future improvement:
+Use a proper coastal-sector geometry or a verified mapping of coastal points to
+INCOIS sectors.
+
+
+32. IMPORTANT LIMITATION: API DOES NOT YET FILTER PFZ CANDIDATES BY USER LOCATION
+===============================================================================
+
+The service fetches the sector's PFZ candidates and calculates the distance from
+the requested location.
+
+It does not currently appear to perform a scientific/geographic filtering step such
+as:
+- candidate inside a radius
+- candidate inside the user's marine zone
+- candidate within a selected fishing range
+- candidate inside the same EEZ/territorial zone
+
+Therefore a sector can return many candidate zones.
+
+Example:
+Maharashtra returned 100 candidates.
+
+The frontend/decision agent will eventually need to decide how many candidates to
+display or evaluate.
+
+
+33. ORCA INTEGRATION
+===================
+
+The PFZ API is intended to become one input to ORCA's multi-agent decision system.
+
+Possible ORCA flow:
+
+User location
+   |
+   +--> GIS agent/service
+   |
+   +--> Weather agent
+   |
+   +--> Ocean agent
+   |
+   +--> Ecosystem agent
+   |
+   +--> PFZ data
+   |
+   v
+Risk / Decision reasoning
+   |
+   v
+Final fishing recommendation
+
+PFZ should therefore provide evidence/data to the decision layer rather than being
+treated as the complete final decision itself.
+
+
+34. WHAT IS CURRENTLY COMPLETE
+==============================
+
+COMPLETE:
+
+[YES] Express PFZ API server
+[YES] GET / endpoint
+[YES] GET /api/pfz endpoint
+[YES] Latitude/longitude parsing
+[YES] Geographic coordinate validation in server route
+[YES] Indian coastal sector detection
+[YES] 14 configured sectors
+[YES] INCOIS home-page access
+[YES] Dynamic SEC ID discovery
+[YES] INCOIS sector page access
+[YES] PFZ table detection
+[YES] Table-row extraction
+[YES] DMS-to-decimal conversion
+[YES] Distance-range parsing
+[YES] Depth-range parsing
+[YES] Bearing extraction
+[YES] Haversine distance calculation
+[YES] Candidate PFZ JSON generation
+[YES] Candidate sorting by user distance
+[YES] Internal PFZ zone IDs
+[YES] Nearest candidate marked as recommended
+[YES] Outside-sector response
+[YES] Error response structure
+[YES] Multi-sector testing
+[YES] Invalid-coordinate testing/fix
+
+
+35. STILL LEFT — HIGH PRIORITY
+==============================
+
+The following items should still be implemented/fixed.
+
+1. FIX FORECAST DATE EXTRACTION
+--------------------------------
+Current:
+forecast_date = null in observed tests.
+
+Need:
+- inspect actual INCOIS rendered text
+- identify the real date label/format
+- update parser
+- test across multiple sectors
+
+Desired result:
+"forecast_date": "01 SEP 2026"
+(or whatever exact current INCOIS date is)
+
+
+2. FIX VALID-UPTO EXTRACTION
+----------------------------
+Current:
+valid_upto = null in observed tests.
+
+Need:
+- inspect actual INCOIS rendered text
+- identify the actual label/format
+- update parser
+- test across multiple sectors
+
+Desired result:
+"valid_upto": "..."
+
+
+3. ADD PFZ CONFIDENCE
+---------------------
+Current:
+pfz_confidence = null
+
+Need:
+Define a defensible confidence model based on available PFZ/environmental evidence.
+
+Do not simply invent a percentage.
+
+Possible inputs later:
+- source/advisory quality
+- SST front
+- chlorophyll
+- persistence
+- spatial consistency
+- freshness of advisory
+
+
+4. IMPLEMENT SUITABILITY SCORE
+------------------------------
+Current:
+suitability_score = null
+
+Need:
+Create an ORCA-defined score for comparing candidate zones.
+
+It should eventually combine relevant factors rather than only distance.
+
+Example conceptual inputs:
+- PFZ confidence
+- SST
+- chlorophyll
+- SST gradient
+- chlorophyll gradient
+- distance
+- weather
+- wave conditions
+- current
+- safety/risk
+
+
+5. INTEGRATE SST
+----------------
+Current:
+sst_c = null
+
+Need:
+Connect a reliable SST data source/API and obtain SST for each candidate zone.
+
+Potential sources should be selected and verified separately.
+
+SST should be tied to:
+- candidate latitude
+- candidate longitude
+- relevant date/time
+
+
+6. INTEGRATE CHLOROPHYLL
+------------------------
+Current:
+chlorophyll_mg_m3 = null
+
+Need:
+Connect a marine/environmental data source for chlorophyll concentration.
+
+Candidate coordinates and observation date/time should be aligned as much as
+possible with the PFZ advisory.
+
+
+7. CALCULATE SST GRADIENT
+-------------------------
+Current:
+sst_gradient = null
+
+Need:
+Compute spatial SST change around the candidate.
+
+This should not be a placeholder.
+
+A defined neighborhood/window and gradient calculation must be chosen.
+
+
+8. CALCULATE CHLOROPHYLL GRADIENT
+----------------------------------
+Current:
+chlorophyll_gradient = null
+
+Need:
+Compute spatial chlorophyll change around the candidate using a defined
+neighborhood/window.
+
+
+9. DETECT OCEAN FRONTS
+----------------------
+Current:
+front_present = null
+
+Need:
+Define a front-detection method, potentially using SST/chlorophyll gradients.
+
+The threshold should be based on a documented scientific/data rule, not arbitrary UI logic.
+
+
+10. REMOVE HARDCODED potential_fish_aggregation
+-----------------------------------------------
+Current:
+
+potential_fish_aggregation: true
+
+This is not a real prediction.
+
+Need:
+Derive it from:
+- INCOIS PFZ evidence
+- environmental indicators
+- or an ORCA ecosystem agent
+
+It should be clearly labeled as an inference if it is model-generated.
+
+
+11. IMPROVE RECOMMENDED LOGIC
+----------------------------
+Current:
+recommended=true means nearest candidate.
+
+This is insufficient for ORCA's final decision support.
+
+Need:
+Use a multi-factor ranking system.
+
+Example conceptual score:
+
+final_score =
+    PFZ confidence
+    + environmental suitability
+    + ecosystem evidence
+    - distance penalty
+    - weather risk
+    - ocean risk
+
+Exact weights must be defined and validated.
+
+
+12. ADD RADIUS/FILTERING
+------------------------
+Current:
+The service can return many sector candidates.
+
+Need:
+Optionally filter candidates by:
+- maximum distance from user
+- requested fishing radius
+- marine zone
+- activity constraints
+
+This will make frontend and agent processing more efficient.
+
+
+13. DEFENSE-IN-DEPTH VALIDATION IN pfzService.js
+------------------------------------------------
+The API route now validates geographic bounds.
+
+However getPFZData() currently checks only Number.isFinite() internally.
+
+For robust architecture, add:
+
+latitude < -90 || latitude > 90 ||
+longitude < -180 || longitude > 180
+
+inside getPFZData() too.
+
+Reason:
+The service should remain safe even if it is called directly by another Node module
+instead of through Express.
+
+
+14. IMPROVE SECTOR DETECTION
+----------------------------
+Current detection uses hard-coded rectangles.
+
+Need:
+- verified sector polygons or coastal-sector geometry
+- better handling of boundary areas
+- less overlap between adjacent sectors
+- better geographic correctness
+
+
+15. HANDLE INCOIS PAGE CHANGES
+------------------------------
+The PFZ API depends on the HTML structure of the INCOIS website.
+
+If INCOIS changes:
+- HTML
+- table layout
+- labels
+- URL parameters
+- JavaScript rendering
+
+the scraper can break.
+
+Need:
+- robust selectors
+- fallback selectors
+- meaningful logging
+- optional parser tests
+- monitoring for source changes
+
+
+16. IMPROVE CHROME CONFIGURATION
+--------------------------------
+Current Chrome path is hard-coded.
+
+Need:
+Use an environment variable, for example:
+
+CHROME_PATH
+
+This makes deployment easier on:
+- another Windows machine
+- server
+- Docker/container
+- cloud environment
+
+
+17. ADD TIMEOUT/RETRY STRATEGY
+-----------------------------
+Need:
+- retry failed INCOIS requests
+- handle temporary website failures
+- distinguish timeout from no-PFZ-data
+- avoid repeated expensive browser launches where possible
+
+
+18. CACHE INCOIS SECTOR DATA
+----------------------------
+Current design launches browser/scrapes INCOIS per API request.
+
+This can be expensive.
+
+Need:
+- cache sector mappings
+- cache recently fetched PFZ advisories
+- add expiration/TTL
+- avoid opening Chrome repeatedly for identical/current requests
+
+
+19. ADD STRUCTURED SOURCE METADATA
+----------------------------------
+The PFZ response currently says:
+
+"source": "INCOIS PFZ"
+
+Future version should ideally include:
+- source URL
+- retrieval timestamp
+- advisory timestamp
+- forecast date
+- valid-until date
+- data freshness
+- source status
+
+This is important for ORCA explainability.
+
+
+20. ADD LOGGING/OBSERVABILITY
+----------------------------
+Need structured logs for:
+- request coordinates
+- detected sector
+- SEC ID
+- source fetch duration
+- table found/not found
+- number of rows
+- number of valid candidates
+- parsing failures
+- source errors
+- cache hit/miss
+
+This will make debugging much easier.
+
+
+36. STILL LEFT — ORCA DECISION-SUPPORT INTEGRATION
+==================================================
+
+PFZ itself is only one part of ORCA.
+
+For the final ORCA system, PFZ should be combined with:
+
+1. Weather data
+   - wind
+   - precipitation
+   - visibility
+   - storm conditions
+
+2. Ocean data
+   - wave height
+   - wave period
+   - currents
+   - sea state
+   - SST
+
+3. Ecosystem data
+   - chlorophyll
+   - fronts
+   - fish/ecosystem indicators
+
+4. GIS data
+   - coastal distance
+   - depth
+   - marine zone
+   - EEZ/territorial waters
+   - ports
+
+5. Risk reasoning
+   - severe weather
+   - dangerous sea state
+   - restricted zones
+   - distance from safe return points
+
+6. Decision agent
+   - combine all evidence
+   - rank PFZ candidates
+   - explain why a location is recommended
+   - provide confidence and warnings
+
+
+37. RECOMMENDED NEXT DEVELOPMENT ORDER
+======================================
+
+DO FIRST:
+
+1. Fix forecast_date extraction
+2. Fix valid_upto extraction
+3. Add defense-in-depth coordinate validation
+4. Add INCOIS retrieval timestamp
+5. Add source URL metadata
+6. Add robust scraping/error handling
+
+THEN:
+
+7. Integrate SST
+8. Integrate chlorophyll
+9. Calculate SST gradient
+10. Calculate chlorophyll gradient
+11. Detect fronts
+
+THEN:
+
+12. Build PFZ confidence score
+13. Build suitability score
+14. Replace nearest-only recommended logic
+15. Add candidate filtering/radius
+
+THEN:
+
+16. Connect PFZ to ORCA Weather/Ocean/Ecosystem/Risk/Decision agents
+17. Add explainable final recommendation
+18. Add caching and production optimization
+
+
+38. CURRENT API STATUS
+======================
+
+Overall status:
+
+PFZ DATA EXTRACTION:
+WORKING
+
+INCOIS INTEGRATION:
+WORKING
+
+SECTOR DETECTION:
+WORKING, but rectangle-based
+
+SEC ID DISCOVERY:
+WORKING
+
+TABLE SCRAPING:
+WORKING
+
+DMS CONVERSION:
+WORKING
+
+DISTANCE CALCULATION:
+WORKING
+
+CANDIDATE GENERATION:
+WORKING
+
+COORDINATE VALIDATION:
+FIXED
+
+FORECAST DATE:
+NOT COMPLETE
+
+VALID-UPTO:
+NOT COMPLETE
+
+PFZ CONFIDENCE:
+NOT IMPLEMENTED
+
+SUITABILITY SCORE:
+NOT IMPLEMENTED
+
+SST:
+NOT INTEGRATED
+
+CHLOROPHYLL:
+NOT INTEGRATED
+
+SST GRADIENT:
+NOT IMPLEMENTED
+
+CHLOROPHYLL GRADIENT:
+NOT IMPLEMENTED
+
+FRONT DETECTION:
+NOT IMPLEMENTED
+
+FISH AGGREGATION PREDICTION:
+PLACEHOLDER
+
+SCIENTIFIC RECOMMENDATION:
+NOT COMPLETE
+
+ORCA MULTI-AGENT DECISION:
+NOT YET CONNECTED TO PFZ
+
+
+39. DEVELOPER HANDOFF SUMMARY
+=============================
+
+A developer receiving this API should understand:
+
+The current PFZ API is a working INCOIS PFZ extraction service.
+
+Input:
+latitude + longitude
+
+Processing:
+1. Validate coordinates
+2. Determine configured coastal sector
+3. Discover INCOIS SEC ID
+4. Scrape the sector PFZ table
+5. Parse advisory rows
+6. Convert DMS coordinates
+7. Parse distance/depth
+8. Calculate distance from user
+9. Return candidate zones
+
+The current implementation is therefore a strong DATA INGESTION + NORMALIZATION
+layer.
+
+It is NOT yet the final ORCA intelligence layer.
+
+The biggest remaining work is to:
+- fix advisory date extraction
+- add marine environmental data
+- calculate meaningful PFZ confidence/suitability
+- replace nearest-only recommendation
+- integrate PFZ evidence with ORCA's other agents
+- improve production robustness/caching
+
+END OF DOCUMENT
+===============

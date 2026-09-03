@@ -1,0 +1,1796 @@
+ORCA — TIDE API
+SIH26176 — Marine EcOsystem Reasoning with Collaborative Agents
+
+COMPLETE TECHNICAL DOCUMENTATION
+================================
+
+1. OVERVIEW
+-----------
+
+The ORCA Tide API is a Node.js/Express microservice responsible for retrieving
+tide predictions for a user-selected geographic location.
+
+The service performs four main operations:
+
+1. Accept latitude and longitude from the client.
+2. Find the nearest tide/PAT station from the local station database.
+3. Request tide information from the INCOIS PAT service for that station and
+   requested date range.
+4. Parse and normalize the INCOIS HTML response into an ORCA-friendly JSON
+   structure.
+
+The current service runs on port 3002 by default and exposes:
+
+    GET /
+
+for a health check, and
+
+    GET /tide
+
+for tide data.
+
+The current implementation uses:
+- Node.js
+- Express
+- CORS
+- native fetch
+- Cheerio
+- a local stations.json database
+- INCOIS PAT tide data
+
+The current source files are:
+- tide.js
+- tideService.js
+- findNearestStation.js
+- stations.json
+- testTide.js
+
+
+2. SYSTEM ARCHITECTURE
+----------------------
+
+                         ORCA Frontend
+                              |
+                              | HTTP GET
+                              v
+                    +----------------------+
+                    |     ORCA Tide API    |
+                    |      Express.js      |
+                    |       Port 3002      |
+                    +----------+-----------+
+                               |
+                 +-------------+-------------+
+                 |                           |
+                 v                           v
+       Coordinate Validation       Nearest Station Search
+                                         |
+                                         v
+                                  stations.json
+                                         |
+                                         v
+                                  Nearest PAT
+                                    Station
+                                         |
+                                         v
+                                  tideService.js
+                                         |
+                                         v
+                                INCOIS PAT Website
+                                         |
+                                         v
+                                   HTML Response
+                                         |
+                                         v
+                                  Cheerio Parser
+                                         |
+                                         v
+                                Normalized Tide Data
+                                         |
+                                         v
+                                  ORCA JSON Response
+
+
+3. PURPOSE IN ORCA
+------------------
+
+Tide information is one component of ORCA's Ocean Agent.
+
+The Tide API provides:
+- nearest available tide station
+- station coordinates
+- distance from requested location
+- high tide predictions
+- low tide predictions
+- requested date range
+- source information
+
+The Ocean Agent can later combine this information with:
+- wave conditions
+- wind
+- sea surface temperature
+- currents
+- weather
+- ecosystem information
+- PFZ information
+- risk analysis
+
+The Tide API itself does not make the final ORCA decision.
+
+
+4. TECHNOLOGY STACK
+-------------------
+
+Backend:
+    Node.js
+    Express.js
+
+Middleware:
+    CORS
+    express.json()
+
+HTTP:
+    native fetch()
+
+HTML parsing:
+    Cheerio
+
+Local geographic lookup:
+    stations.json
+
+Distance calculation:
+    Haversine formula
+
+External data source:
+    INCOIS PAT
+
+
+5. FILE STRUCTURE
+-----------------
+
+Recommended tide service folder:
+
+    tide/
+    |
+    +-- tide.js
+    +-- tideService.js
+    +-- findNearestStation.js
+    +-- stations.json
+    +-- testTide.js
+    +-- package.json
+
+
+6. FILE RESPONSIBILITIES
+------------------------
+
+6.1 tide.js
+
+This is the main Express server.
+
+Responsibilities:
+- start the HTTP server
+- configure CORS
+- configure JSON middleware
+- validate coordinates
+- validate dates
+- find the nearest station
+- call the tide service
+- build the ORCA response
+- expose health and tide endpoints
+- handle errors
+
+The server defaults to port 3002.
+
+
+6.2 tideService.js
+
+This is the INCOIS integration and parsing layer.
+
+Responsibilities:
+- construct the INCOIS PAT URL
+- send the HTTP request
+- receive the HTML page
+- locate the relevant tide table
+- extract high/low tide rows
+- validate tide timestamps
+- parse tide heights
+- remove duplicate records
+- sort records chronologically
+- return normalized tide data
+
+
+6.3 findNearestStation.js
+
+This is the geographic station lookup layer.
+
+Responsibilities:
+- validate numeric coordinates
+- iterate through all stations
+- calculate geographic distance
+- select the station with the smallest distance
+- return station metadata
+
+The implementation uses the Haversine formula with Earth radius:
+
+    R = 6371 km
+
+
+6.4 stations.json
+
+This is the local station database.
+
+It contains station objects with:
+
+    name
+    latitude
+    longitude
+
+The current uploaded station database contains 872 lines of JSON data and
+includes stations such as Chennai, Kochi, Marmagao, Mumbai-related stations,
+Visakhapatnam, Port Blair, etc.
+
+The service uses this local dataset instead of querying an external station
+directory on every request.
+
+
+6.5 testTide.js
+
+This is the test client.
+
+It sends requests to:
+
+    http://localhost:3002/tide
+
+It tests:
+- Mumbai
+- Chennai
+- Goa
+- Kerala
+- invalid latitude
+- invalid longitude
+
+It also handles the API response where data.data is an array and safely
+extracts the first location object.
+
+
+7. MAIN REQUEST FLOW
+--------------------
+
+Step 1:
+Client sends latitude, longitude and date range.
+
+Example:
+
+    GET /tide?lat=19.076&lon=72.8777&fromDate=2026-08-29&toDate=2026-09-05
+
+Step 2:
+Express receives the request.
+
+Step 3:
+The route reads:
+- lat
+- lon
+- fromDate
+- toDate
+
+Step 4:
+Coordinates are converted to numbers.
+
+Step 5:
+Coordinates are geographically validated.
+
+Latitude must be:
+
+    -90 <= latitude <= 90
+
+Longitude must be:
+
+    -180 <= longitude <= 180
+
+Step 6:
+Dates are validated.
+
+Expected format:
+
+    YYYY-MM-DD
+
+Step 7:
+The service creates a location object.
+
+Step 8:
+getTideData() processes the location.
+
+Step 9:
+getTideForLocation() finds the nearest PAT station.
+
+Step 10:
+The station name is sent to INCOIS PAT.
+
+Step 11:
+INCOIS returns HTML.
+
+Step 12:
+Cheerio parses the HTML.
+
+Step 13:
+High and low tides are extracted.
+
+Step 14:
+Duplicate records are removed.
+
+Step 15:
+Records are sorted chronologically.
+
+Step 16:
+The API returns normalized JSON.
+
+
+8. SERVER CONFIGURATION
+-----------------------
+
+The server imports:
+
+    express
+    cors
+    findNearestStation
+    fetchTidePage
+    parseTidePage
+
+The default port is:
+
+    3002
+
+Environment variable:
+
+    PORT
+
+Therefore:
+
+    PORT=3002
+
+is used when PORT is not supplied.
+
+The server enables:
+
+    cors()
+
+and:
+
+    express.json()
+
+
+9. HEALTH CHECK ENDPOINT
+------------------------
+
+Endpoint:
+
+    GET /
+
+Example:
+
+    http://localhost:3002/
+
+Purpose:
+- verify that the service is running
+- verify the selected port
+- identify the API endpoint
+
+Expected structure:
+
+    {
+      "success": true,
+      "service": "ORCA Tide API",
+      "status": "running",
+      "port": 3002,
+      "endpoint": "/tide"
+    }
+
+
+10. TIDE ENDPOINT
+-----------------
+
+Endpoint:
+
+    GET /tide
+
+Full local URL:
+
+    http://localhost:3002/tide
+
+
+11. QUERY PARAMETERS
+--------------------
+
+Required when coordinates are supplied:
+
+    lat
+    lon
+
+Optional:
+
+    fromDate
+    toDate
+
+Example:
+
+    /tide?lat=19.076&lon=72.8777&fromDate=2026-08-29&toDate=2026-09-05
+
+
+12. DEFAULT LOCATION
+--------------------
+
+If lat and lon are not supplied, the current server uses Mumbai:
+
+    latitude  = 19.076
+    longitude = 72.8777
+
+Therefore:
+
+    GET /tide
+
+uses Mumbai as the default location.
+
+
+13. DEFAULT DATE RANGE
+----------------------
+
+If dates are not supplied, the current server defaults to:
+
+    fromDate = 2026-08-29
+    toDate   = 2026-11-30
+
+For production deployment these hard-coded defaults should eventually be
+replaced with a dynamically calculated/current date range.
+
+
+14. COORDINATE VALIDATION
+-------------------------
+
+The current implementation performs geographic validation.
+
+Rules:
+
+    Latitude:
+        -90 to +90
+
+    Longitude:
+        -180 to +180
+
+Invalid values produce HTTP 400.
+
+Example:
+
+    /tide?lat=999&lon=72.8777
+
+Expected error:
+
+    {
+      "success": false,
+      "error": "Invalid latitude or longitude. Latitude must be between -90 and 90, longitude must be between -180 and 180."
+    }
+
+This prevents the earlier problem where values such as latitude 999 or
+longitude 999 could accidentally be passed to the station search.
+
+
+15. PARTIAL COORDINATE INPUT
+----------------------------
+
+If only one of lat/lon is provided, the API rejects the request.
+
+Example:
+
+    /tide?lat=19.076
+
+Expected error:
+
+    {
+      "success": false,
+      "error": "Both lat and lon are required"
+    }
+
+
+16. DATE VALIDATION
+-------------------
+
+Dates must match:
+
+    YYYY-MM-DD
+
+The service checks:
+- correct string format
+- valid calendar date
+- date ordering
+
+Examples of valid dates:
+
+    2026-09-03
+    2026-09-04
+
+Invalid examples:
+
+    03-09-2026
+    2026/09/03
+    2026-02-31
+
+
+17. DATE ORDER VALIDATION
+-------------------------
+
+The service requires:
+
+    fromDate <= toDate
+
+If:
+
+    fromDate > toDate
+
+the API returns:
+
+    fromDate must be before or equal to toDate
+
+
+18. NEAREST STATION SEARCH
+--------------------------
+
+The station lookup receives:
+
+    latitude
+    longitude
+
+It first verifies that both values are numeric and finite.
+
+It then iterates over every station in stations.json.
+
+For each station, it calculates geographic distance using the Haversine
+formula.
+
+
+19. HAVERSINE FORMULA
+---------------------
+
+The implementation uses:
+
+    R = 6371 km
+
+where R is the approximate Earth radius.
+
+For two locations:
+
+    latitude1, longitude1
+    latitude2, longitude2
+
+the algorithm calculates:
+
+    dLat = latitude2 - latitude1
+    dLon = longitude2 - longitude1
+
+After conversion to radians:
+
+    a =
+        sin²(dLat/2)
+        +
+        cos(latitude1)
+        ×
+        cos(latitude2)
+        ×
+        sin²(dLon/2)
+
+Then:
+
+    c = 2 × atan2(sqrt(a), sqrt(1-a))
+
+Distance:
+
+    distance = R × c
+
+
+20. STATION SELECTION
+---------------------
+
+The algorithm maintains:
+
+    shortestDistance = Infinity
+    nearestStation = null
+
+For every station:
+
+    if distance < shortestDistance
+
+then the station becomes the current nearest station.
+
+At the end, the nearest station is returned.
+
+
+21. STATION RESPONSE
+--------------------
+
+The nearest station is normalized to:
+
+    {
+      "name": "...",
+      "latitude": ...,
+      "longitude": ...,
+      "distance_km": ...
+    }
+
+Distance is rounded to two decimal places.
+
+
+22. EXAMPLE STATION DATABASE
+----------------------------
+
+The local stations database contains entries such as:
+
+    Chennai
+    latitude: 13.1
+    longitude: 80.3
+
+    Kochi
+    latitude: 9.96667
+    longitude: 76.2667
+
+    Marmagao
+    latitude: 15.4167
+    longitude: 73.8
+
+    Mumbai-Apollo-Bandar
+    latitude: 18.9167
+    longitude: 72.8333
+
+    Mumbai-Princes-Dock
+    latitude: 18.95
+    longitude: 72.85
+
+The exact station selected depends on the requested coordinates.
+
+
+23. INCOIS PAT INTEGRATION
+--------------------------
+
+The external source URL configured in tideService.js is:
+
+    https://www.incois.gov.in/oceanservices/PAT/tidegraphphases.jsp
+
+The service constructs query parameters:
+
+    fromDate
+    toDate
+    region
+
+Example conceptual request:
+
+    https://www.incois.gov.in/oceanservices/PAT/tidegraphphases.jsp
+        ?fromDate=2026-08-29
+        &toDate=2026-09-05
+        &region=Chennai
+
+The region parameter is the selected station name.
+
+
+24. FETCHING THE INCOIS PAGE
+----------------------------
+
+fetchTidePage() requires:
+
+    stationName
+    fromDate
+    toDate
+
+It checks that all three values exist.
+
+It then creates a URL object and sets the required query parameters.
+
+The request is made with native fetch().
+
+If INCOIS responds with a non-2xx status, the service throws:
+
+    INCOIS request failed: <status>
+
+
+25. HTML PARSING
+----------------
+
+INCOIS returns an HTML page.
+
+The service loads it with:
+
+    cheerio.load(html)
+
+Then it examines HTML tables.
+
+The parser searches for a table whose text contains both:
+
+    "high tide"
+
+and:
+
+    "low tide"
+
+This avoids relying only on a fixed table index.
+
+
+26. TIDE TABLE EXTRACTION
+-------------------------
+
+For each matching table, the parser examines table rows.
+
+It extracts td elements.
+
+The expected row structure is:
+
+    High Time | High Level | Low Time | Low Level
+
+Example:
+
+    30-08-2026 00:09
+    1.20
+    30-08-2026 05:59
+    0.36
+
+The parser requires at least four cells.
+
+
+27. HIGH TIDE PROCESSING
+------------------------
+
+The first cell is interpreted as:
+
+    highTime
+
+The second cell is converted to:
+
+    highLevel
+
+The record is accepted only when:
+- highTime has the expected timestamp format
+- highLevel is a finite number
+
+The normalized record internally contains:
+
+    date
+    time
+    height_m
+
+
+28. LOW TIDE PROCESSING
+-----------------------
+
+The third cell is:
+
+    lowTime
+
+The fourth cell is:
+
+    lowLevel
+
+The record is accepted only when:
+- lowTime has the expected timestamp format
+- lowLevel is a finite number
+
+The normalized record contains:
+
+    date
+    time
+    height_m
+
+
+29. TIDE TIME FORMAT
+--------------------
+
+The expected INCOIS format is:
+
+    DD-MM-YYYY HH:mm
+
+Example:
+
+    30-08-2026 05:59
+
+The parser validates this format using a regular expression.
+
+
+30. DATE AND TIME EXTRACTION
+----------------------------
+
+The parser separates the date and time.
+
+Example:
+
+    Input:
+        30-08-2026 05:59
+
+    Date:
+        30-08-2026
+
+    Time:
+        05:59
+
+
+31. DUPLICATE REMOVAL
+---------------------
+
+The parser creates a unique key:
+
+    date|time|height_m
+
+A Map is used to remove duplicate records.
+
+This prevents repeated rows from appearing in the final response.
+
+
+32. CHRONOLOGICAL SORTING
+-------------------------
+
+After duplicate removal, high and low tide records are sorted independently.
+
+The parser converts the INCOIS timestamp into a Date representation.
+
+The source values are treated as Indian Standard Time (IST).
+
+The code converts IST to UTC for sorting by subtracting:
+
+    5 hours 30 minutes
+
+This allows correct chronological comparison.
+
+
+33. FINAL TIDE OBJECT
+---------------------
+
+The parser returns:
+
+    {
+      "current_tide_height_m": null,
+      "tide_phase": null,
+      "high_tide": [],
+      "low_tide": [],
+      "tidal_current_velocity_ms": null,
+      "tidal_current_direction_deg": null
+    }
+
+
+34. HIGH TIDE FORMAT
+--------------------
+
+Each high tide is returned as:
+
+    {
+      "time": "30-08-2026 00:09",
+      "height_m": 1.20
+    }
+
+
+35. LOW TIDE FORMAT
+-------------------
+
+Each low tide is returned as:
+
+    {
+      "time": "30-08-2026 05:59",
+      "height_m": 0.36
+    }
+
+
+36. COMPLETE LOCATION RESPONSE
+------------------------------
+
+A successful location response follows:
+
+    {
+      "latitude": 19.076,
+      "longitude": 72.8777,
+
+      "station": {
+        "name": "...",
+        "latitude": ...,
+        "longitude": ...,
+        "distance_km": ...
+      },
+
+      "date_range": {
+        "from": "2026-08-29",
+        "to": "2026-09-05"
+      },
+
+      "tides": {
+        "current_tide_height_m": null,
+        "tide_phase": null,
+
+        "high_tide": [
+          {
+            "time": "30-08-2026 00:09",
+            "height_m": 1.20
+          }
+        ],
+
+        "low_tide": [
+          {
+            "time": "30-08-2026 05:59",
+            "height_m": 0.36
+          }
+        ],
+
+        "tidal_current_velocity_ms": null,
+        "tidal_current_direction_deg": null
+      },
+
+      "source": "INCOIS PAT"
+    }
+
+
+37. COMPLETE API RESPONSE
+-------------------------
+
+The /tide route wraps the location result in:
+
+    {
+      "success": true,
+
+      "date_range": {
+        "from": "...",
+        "to": "..."
+      },
+
+      "locations_count": 1,
+
+      "data": [
+        {
+          "latitude": ...,
+          "longitude": ...,
+          "station": {...},
+          "date_range": {...},
+          "tides": {...},
+          "source": "INCOIS PAT"
+        }
+      ]
+    }
+
+The current implementation uses an array for data because the underlying
+getTideData() function is designed to process multiple locations.
+
+
+38. MULTI-LOCATION SUPPORT
+--------------------------
+
+getTideData() accepts:
+
+    locations
+
+as an array.
+
+Example:
+
+    [
+      {
+        "latitude": 19.076,
+        "longitude": 72.8777
+      },
+      {
+        "latitude": 13.0827,
+        "longitude": 80.2707
+      }
+    ]
+
+The implementation uses Promise.all() to process locations concurrently.
+
+Although the HTTP route currently creates one location from query parameters,
+the service layer already supports multiple locations.
+
+
+39. MULTI-LOCATION VALIDATION
+-----------------------------
+
+getTideData() checks:
+
+1. locations is an array.
+2. locations is not empty.
+3. fromDate is valid.
+4. toDate is valid.
+5. fromDate <= toDate.
+6. each location exists.
+7. each location has valid geographic coordinates.
+
+
+40. ERROR HANDLING
+------------------
+
+Route-level errors are caught with try/catch.
+
+On an unexpected server/service error, the route returns HTTP 500:
+
+    {
+      "success": false,
+      "error": "..."
+    }
+
+Validation errors handled directly by the route return HTTP 400.
+
+
+41. HTTP STATUS CODES
+---------------------
+
+Expected statuses:
+
+    200
+        Successful request
+
+    400
+        Invalid user input
+
+    500
+        Unexpected server/external service failure
+
+
+42. API EXAMPLES
+----------------
+
+42.1 Mumbai
+
+    GET /tide?lat=19.076&lon=72.8777&fromDate=2026-08-29&toDate=2026-09-05
+
+
+42.2 Chennai
+
+    GET /tide?lat=13.0827&lon=80.2707&fromDate=2026-08-29&toDate=2026-09-05
+
+
+42.3 Goa
+
+    GET /tide?lat=15.4909&lon=73.8278&fromDate=2026-08-29&toDate=2026-09-05
+
+
+42.4 Kerala / Kochi area
+
+    GET /tide?lat=9.9312&lon=76.2673&fromDate=2026-08-29&toDate=2026-09-05
+
+
+43. TESTING
+-----------
+
+The provided testTide.js sends six tests:
+
+TEST 1:
+    Mumbai
+
+TEST 2:
+    Chennai
+
+TEST 3:
+    Goa
+
+TEST 4:
+    Kerala
+
+TEST 5:
+    Invalid Latitude
+
+TEST 6:
+    Invalid Longitude
+
+The test client prints:
+- HTTP status
+- success flag
+- date range
+- location count
+- station name
+- station coordinates
+- station distance
+- high tide count
+- low tide count
+- current tide height
+- tide phase
+- current velocity
+- current direction
+- first three high tides
+- first three low tides
+- source
+- complete location response
+
+
+44. RUNNING THE SERVICE
+-----------------------
+
+Install dependencies if required:
+
+    npm install express cors cheerio
+
+Run:
+
+    node tide.js
+
+Expected console output includes:
+
+    ORCA TIDE SERVER
+
+    Server running on:
+    http://localhost:3002
+
+    Tide API:
+    http://localhost:3002/tide
+
+
+45. RUNNING THE TEST CLIENT
+---------------------------
+
+With tide.js running in one terminal:
+
+    node testTide.js
+
+The test script calls:
+
+    http://localhost:3002/tide
+
+for each test case.
+
+
+46. TESTING WITH BROWSER
+------------------------
+
+A browser can be used for a GET request.
+
+Example:
+
+    http://localhost:3002/tide?lat=19.076&lon=72.8777&fromDate=2026-08-29&toDate=2026-09-05
+
+For invalid coordinates:
+
+    http://localhost:3002/tide?lat=999&lon=72.8777&fromDate=2026-08-29&toDate=2026-09-05
+
+Expected result:
+
+    HTTP 400
+
+
+47. TESTING WITH CURL
+---------------------
+
+Example:
+
+    curl "http://localhost:3002/tide?lat=19.076&lon=72.8777&fromDate=2026-08-29&toDate=2026-09-05"
+
+
+48. FRONTEND INTEGRATION
+------------------------
+
+The ORCA frontend can call:
+
+    GET /tide
+
+using the selected coordinates.
+
+Frontend flow:
+
+    User selects location
+           |
+           v
+    latitude / longitude
+           |
+           v
+    GET /tide
+           |
+           v
+    Tide API
+           |
+           v
+    JSON
+           |
+           v
+    Ocean Agent / Dashboard
+           |
+           v
+    Tide chart + indicators
+
+
+49. DASHBOARD USAGE
+-------------------
+
+The frontend can display:
+
+    Nearest Station
+    Station Distance
+    High Tide Times
+    High Tide Heights
+    Low Tide Times
+    Low Tide Heights
+    Requested Date Range
+    Data Source
+
+
+50. TIDE CHART
+-------------
+
+Recharts can visualize:
+
+X axis:
+    time
+
+Y axis:
+    height_m
+
+The frontend can combine high and low tide events into a chronological tide
+timeline.
+
+
+51. OCEAN AGENT INTEGRATION
+---------------------------
+
+The Ocean Agent can consume the Tide API response.
+
+Example internal input:
+
+    {
+      "tide": {
+        "high_tide": [...],
+        "low_tide": [...]
+      }
+    }
+
+The Ocean Agent can then compare tide timing with:
+- requested activity time
+- wave conditions
+- currents
+- weather
+- location characteristics
+
+
+52. RISK AGENT INTEGRATION
+--------------------------
+
+The Risk Agent can use tide information as one risk factor.
+
+Examples of future reasoning:
+
+    activity occurs near high tide
+    activity occurs near low tide
+    tidal range is large
+    tide information is unavailable
+
+Tide alone should not determine the final risk level.
+
+
+53. DECISION AGENT INTEGRATION
+------------------------------
+
+The Decision Agent can receive:
+
+    Weather
+    Ocean
+    Tide
+    Ecosystem
+    PFZ
+    Risk
+
+and generate the final ORCA recommendation.
+
+Example conceptual reasoning:
+
+    Tide: acceptable
+    Waves: moderate
+    Wind: moderate
+    PFZ: favorable
+    Ecosystem: favorable
+    Risk: moderate
+
+    Final decision:
+    CONDITIONALLY SUITABLE
+
+
+54. CURRENT NULL FIELDS
+-----------------------
+
+The following fields currently return null:
+
+    current_tide_height_m
+    tide_phase
+    tidal_current_velocity_ms
+    tidal_current_direction_deg
+
+These fields are part of the ORCA-normalized structure but are not currently
+calculated by the parser.
+
+They must not be interpreted as measured zero values.
+
+null means that the value is currently unavailable/not implemented.
+
+
+55. IMPORTANT DISTINCTION
+-------------------------
+
+The current API provides predicted high/low tide events.
+
+It does NOT currently calculate:
+- real-time water level
+- current tidal phase
+- tidal current velocity
+- tidal current direction
+
+Those require additional data or algorithms.
+
+
+56. CURRENT ARCHITECTURE STRENGTHS
+----------------------------------
+
+1. Clear separation of responsibilities.
+2. Local station lookup is fast and deterministic.
+3. Haversine distance is appropriate for geographic nearest-station selection.
+4. Geographic coordinate validation is implemented.
+5. Date validation is implemented.
+6. INCOIS integration is isolated in tideService.js.
+7. HTML parsing is separated from Express routing.
+8. Duplicate tide events are removed.
+9. Tide events are sorted chronologically.
+10. Multiple locations are supported at the service layer.
+11. A dedicated test script exists.
+12. The response is already suitable for ORCA integration.
+
+
+57. CURRENT LIMITATIONS
+----------------------
+
+1. Station selection is purely nearest-distance based.
+2. No maximum station distance is enforced.
+3. The local station dataset may contain stations outside the immediate
+   Indian coastal region.
+4. The INCOIS website is an HTML source rather than a dedicated API endpoint.
+5. HTML structure changes at INCOIS could break the parser.
+6. There is no retry mechanism.
+7. There is no request timeout shown in the current fetch implementation.
+8. There is no caching layer.
+9. Default dates are hard-coded.
+10. Current tide height is not calculated.
+11. Tide phase is not calculated.
+12. Tidal current velocity is not calculated.
+13. Tidal current direction is not calculated.
+14. No data freshness/retrieval timestamp is included in the final response.
+15. The current route exposes one location per HTTP request even though the
+    service layer supports multiple locations.
+
+
+58. RECOMMENDED FUTURE IMPROVEMENTS
+----------------------------------
+
+Priority 1 — Production reliability
+
+Add:
+- fetch timeout
+- retries
+- structured error codes
+- logging
+- caching
+- rate limiting
+
+Priority 2 — Station quality
+
+Add:
+- maximum allowed station distance
+- station type/region metadata
+- coastal relevance filtering
+- station availability validation
+
+Priority 3 — Tide intelligence
+
+Implement:
+- current tide height
+- current tide phase
+- tidal range
+- next high tide
+- next low tide
+- time to next high/low tide
+- tidal current information where a reliable source is available
+
+Priority 4 — ORCA intelligence
+
+Add:
+- activity-specific tide suitability
+- tide risk score
+- tide confidence
+- interaction with wave/current conditions
+
+Priority 5 — Data provenance
+
+Add:
+
+    source
+    retrieved_at
+    source_station
+    source_url
+    data_period
+    data_quality
+
+
+59. RECOMMENDED FUTURE RESPONSE
+--------------------------------
+
+A more production-ready response could eventually become:
+
+    {
+      "success": true,
+
+      "request": {
+        "latitude": 19.076,
+        "longitude": 72.8777,
+        "fromDate": "2026-09-03",
+        "toDate": "2026-09-05"
+      },
+
+      "station": {
+        "name": "Mumbai-Apollo-Bandar",
+        "latitude": 18.9167,
+        "longitude": 72.8333,
+        "distance_km": 18.2
+      },
+
+      "tides": {
+        "current_tide_height_m": null,
+        "tide_phase": null,
+        "next_high_tide": null,
+        "next_low_tide": null,
+        "high_tide": [],
+        "low_tide": [],
+        "tidal_current_velocity_ms": null,
+        "tidal_current_direction_deg": null
+      },
+
+      "metadata": {
+        "source": "INCOIS PAT",
+        "retrieved_at": "...",
+        "status": "available"
+      }
+    }
+
+This is a future target structure, not the current implemented response.
+
+
+60. SECURITY / ROBUSTNESS
+-------------------------
+
+Recommended production protections:
+
+- validate every query parameter
+- never trust client-provided station names
+- use URL encoding through URLSearchParams/URL
+- set HTTP request timeout
+- limit request frequency
+- avoid exposing stack traces to clients
+- log external service failures internally
+- validate parsed numeric values
+- handle malformed INCOIS HTML safely
+
+
+61. PERFORMANCE
+----------------
+
+Current nearest-station lookup has approximately:
+
+    O(N)
+
+complexity per location,
+
+where N is the number of stations.
+
+For the current station database this is acceptable.
+
+If the station database becomes very large, spatial indexing can be introduced.
+
+Possible future approaches:
+- geohash
+- R-tree
+- spatial database
+- PostGIS
+
+
+62. RELIABILITY MODEL
+---------------------
+
+The Tide API depends on two major resources:
+
+1. local stations.json
+2. external INCOIS PAT service
+
+If stations.json is unavailable:
+    nearest-station lookup fails.
+
+If INCOIS is unavailable:
+    tide retrieval fails.
+
+A future production implementation should distinguish:
+
+    station lookup failure
+    INCOIS network failure
+    INCOIS HTTP failure
+    parsing failure
+    no tide data
+    invalid request
+
+
+63. LOGGING
+-----------
+
+The service currently logs the INCOIS request URL and server/API information.
+
+A production logger should record:
+
+    request ID
+    latitude
+    longitude
+    station
+    date range
+    external response status
+    parsing result
+    response time
+    error category
+
+Sensitive information should not be logged.
+
+
+64. API CONTRACT SUMMARY
+------------------------
+
+REQUEST:
+
+    GET /tide
+
+PARAMETERS:
+
+    lat       number/string
+    lon       number/string
+    fromDate  YYYY-MM-DD
+    toDate    YYYY-MM-DD
+
+SUCCESS:
+
+    200
+
+RESPONSE:
+
+    success
+    date_range
+    locations_count
+    data[]
+
+
+65. ERROR CONTRACT SUMMARY
+--------------------------
+
+400:
+    invalid coordinates
+    missing lat/lon pair
+    invalid fromDate
+    invalid toDate
+    invalid date ordering
+
+500:
+    unexpected service failure
+    nearest station failure
+    INCOIS request failure
+    parser failure
+
+
+66. TEST CHECKLIST
+------------------
+
+Basic:
+    [ ] Server starts
+    [ ] Health endpoint works
+    [ ] Mumbai request works
+    [ ] Chennai request works
+    [ ] Goa request works
+    [ ] Kerala request works
+
+Coordinates:
+    [ ] latitude > 90 rejected
+    [ ] latitude < -90 rejected
+    [ ] longitude > 180 rejected
+    [ ] longitude < -180 rejected
+    [ ] missing latitude rejected
+    [ ] missing longitude rejected
+
+Dates:
+    [ ] valid date accepted
+    [ ] malformed date rejected
+    [ ] impossible date rejected
+    [ ] reversed date range rejected
+
+Data:
+    [ ] station returned
+    [ ] station distance returned
+    [ ] high tides returned
+    [ ] low tides returned
+    [ ] duplicates removed
+    [ ] chronological order correct
+    [ ] source returned
+
+External service:
+    [ ] INCOIS reachable
+    [ ] INCOIS error handled
+    [ ] malformed HTML handled
+
+
+67. TROUBLESHOOTING
+-------------------
+
+Problem:
+    findNearestStation is not a function
+
+Cause:
+    CommonJS import/export mismatch.
+
+Correct export in findNearestStation.js:
+
+    module.exports = {
+        findNearestStation
+    };
+
+Matching import:
+
+    const { findNearestStation } =
+        require("./findNearestStation");
+
+
+Problem:
+    Invalid coordinates accepted
+
+Check:
+    validateCoordinates()
+
+The route must convert query parameters with Number() and verify geographic
+bounds.
+
+
+Problem:
+    No tide records
+
+Check:
+    - INCOIS response
+    - selected station name
+    - requested date range
+    - HTML table structure
+
+
+Problem:
+    Parser stops working after INCOIS changes its website
+
+Check:
+    - table selection logic
+    - td ordering
+    - date/time format
+    - column structure
+
+
+68. END-TO-END EXAMPLE
+----------------------
+
+Input:
+
+    latitude:
+        13.0827
+
+    longitude:
+        80.2707
+
+    fromDate:
+        2026-08-29
+
+    toDate:
+        2026-09-05
+
+Processing:
+
+    1. Validate coordinates
+    2. Validate dates
+    3. Search stations.json
+    4. Select nearest station
+    5. Extract station name
+    6. Build INCOIS PAT URL
+    7. Fetch HTML
+    8. Find High Tide / Low Tide table
+    9. Parse rows
+   10. Validate timestamps
+   11. Convert heights to numbers
+   12. Remove duplicates
+   13. Sort chronologically
+   14. Build ORCA tide object
+   15. Return JSON
+
+
+69. ROLE IN THE COMPLETE ORCA SYSTEM
+------------------------------------
+
+The Tide API is not the entire Ocean Agent.
+
+It is a specialized data service:
+
+    User Location
+         |
+         v
+    Tide API
+         |
+         v
+    Tide Information
+         |
+         v
+    Ocean Agent
+         |
+         +---- Weather Agent
+         |
+         +---- Ecosystem Agent
+         |
+         +---- PFZ
+         |
+         +---- GIS
+         |
+         v
+    Risk Agent
+         |
+         v
+    Decision Agent
+
+
+70. FINAL STATUS
+----------------
+
+CURRENTLY IMPLEMENTED:
+
+    ✓ Express server
+    ✓ CORS
+    ✓ / health endpoint
+    ✓ /tide endpoint
+    ✓ latitude validation
+    ✓ longitude validation
+    ✓ missing coordinate validation
+    ✓ date validation
+    ✓ date ordering validation
+    ✓ nearest-station lookup
+    ✓ local stations.json database
+    ✓ Haversine distance
+    ✓ INCOIS PAT request
+    ✓ HTML parsing with Cheerio
+    ✓ high tide extraction
+    ✓ low tide extraction
+    ✓ tide height parsing
+    ✓ duplicate removal
+    ✓ chronological sorting
+    ✓ normalized ORCA response
+    ✓ multi-location service-layer support
+    ✓ testTide.js
+
+
+CURRENTLY NOT IMPLEMENTED:
+
+    → current tide height
+    → tide phase
+    → tidal current velocity
+    → tidal current direction
+    → station maximum-distance filter
+    → retry/timeout strategy
+    → caching
+    → dynamic default dates
+    → retrieval metadata
+    → advanced tide risk scoring
+    → activity-specific tide suitability
+
+
+71. CONCLUSION
+-------------
+
+The ORCA Tide API is a modular marine-data service that converts a geographic
+request into usable tide predictions.
+
+Its architecture separates:
+- HTTP routing
+- coordinate/date validation
+- geographic station selection
+- external INCOIS retrieval
+- HTML parsing
+- data normalization
+- testing
+
+The most important design decision is that the API does not send raw INCOIS
+HTML to ORCA. It converts the external source into a stable internal structure
+containing station information, high tides, low tides, date range, and source.
+
+This makes the Tide API suitable as a reusable component of ORCA's Ocean Agent.
+
+The next major development step should be to enrich the tide output with
+current tide state, next high/low tide calculations, tidal range, data
+freshness, reliability metadata, and activity-specific risk/suitability
+information.

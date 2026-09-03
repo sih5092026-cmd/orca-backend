@@ -1,0 +1,1889 @@
+ORCA — ECOSYSTEM API
+
+Complete Technical Documentation
+
+SIH26176 — Marine EcOsystem Reasoning with Collaborative Agents (ORCA)
+
+------------------------------------------------------------------------
+
+1. Purpose
+
+This document records the current ORCA Ecosystem API implementation,
+including its architecture, files, datasets, variables, request/response
+contract, future-date behavior, testing, problems encountered, fixes,
+limitations, security considerations, and recommended next steps.
+
+The current implementation is a working prototype. It should not be
+described as a fully validated scientific decision engine.
+
+------------------------------------------------------------------------
+
+2. ORCA Context
+
+ORCA is a marine intelligence and decision-support platform intended to
+combine:
+
+-   Weather Agent
+-   Ocean Agent
+-   Ecosystem Agent
+-   Risk Agent
+-   Decision Agent
+-   GIS
+-   PFZ
+-   Tide
+
+The Ecosystem API supplies marine biogeochemical and biological
+information to the Ecosystem Agent and later to the Risk and Decision
+agents.
+
+Its purpose is to answer questions such as:
+
+-   What is the biological state of the ocean at a location?
+-   What are chlorophyll and phytoplankton conditions?
+-   What are nutrient conditions?
+-   What is dissolved oxygen?
+-   What are pH/carbon conditions?
+-   What are expected ecosystem conditions on a future date?
+-   Are satellite ocean-colour observations available?
+
+A key project requirement is future ecosystem data, so the main
+ecosystem variables use Copernicus Marine forecast-capable
+biogeochemistry datasets.
+
+------------------------------------------------------------------------
+
+3. Current File Structure
+
+The current implementation consists of:
+
+ecosystemServer.js
+
+Express HTTP server and /api/ecosystem route.
+
+ecosystem.js
+
+Node.js bridge between Express and Python.
+
+ecosystem.py
+
+Python data retrieval/transformation layer using copernicusmarine.
+
+.env
+
+Runtime configuration and Copernicus credentials. Real credentials are
+intentionally not reproduced here.
+
+testEcosystem.js
+
+Automated HTTP test client for multiple locations and dates.
+
+Logical flow:
+
+    Frontend / Browser
+           |
+           v
+    ecosystemServer.js
+           |
+           v
+    ecosystem.js
+           |
+           | JSON via stdin/stdout
+           v
+    ecosystem.py
+           |
+           v
+    Copernicus Marine
+           |
+           +--> BGC Forecast datasets
+           |
+           +--> Ocean Colour observations
+           |
+           v
+    Python JSON
+           |
+           v
+    Node.js API response
+           |
+           v
+    ORCA Agents / Frontend
+
+------------------------------------------------------------------------
+
+4. Technology Stack
+
+-   Node.js
+-   Express
+-   CORS
+-   Python
+-   copernicusmarine
+-   Pandas/DataFrame
+-   dotenv
+-   Node.js child_process.spawn()
+-   JavaScript fetch()
+-   Copernicus Marine Service
+
+The current Ecosystem service runs on port 3006 by default.
+
+------------------------------------------------------------------------
+
+5. ecosystemServer.js
+
+The server imports getEcosystemData() from ecosystem.js.
+
+It uses:
+
+    process.env.PORT || 3006
+
+Middleware:
+
+    app.use(cors());
+    app.use(express.json());
+
+Home endpoint
+
+    GET /
+
+It reports:
+
+-   service name
+-   running status
+-   example ecosystem endpoint
+
+Main endpoint
+
+    GET /api/ecosystem
+
+Required query parameters:
+
+    latitude
+    longitude
+    date
+
+Example:
+
+    http://localhost:3006/api/ecosystem?latitude=19.076&longitude=72.8777&date=2026-09-05
+
+Coordinate validation
+
+Latitude must be:
+
+    -90 <= latitude <= 90
+
+Longitude must be:
+
+    -180 <= longitude <= 180
+
+Invalid latitude or longitude returns HTTP 400.
+
+Date validation
+
+The Express route requires the date parameter.
+
+If it is missing, HTTP 400 is returned.
+
+The detailed YYYY-MM-DD validation is performed in Python.
+
+Successful response
+
+The current HTTP response has this structure:
+
+    {
+      "success": true,
+      "location": {
+        "latitude": 19.076,
+        "longitude": 72.8777
+      },
+      "request": {
+        "date": "2026-09-05"
+      },
+      "ecosystem": {
+        "...": "..."
+      }
+    }
+
+Error response
+
+If the ecosystem process fails:
+
+    {
+      "success": false,
+      "error": "Failed to fetch ecosystem data",
+      "message": "..."
+    }
+
+Unknown routes return:
+
+    {
+      "success": false,
+      "error": "Endpoint not found"
+    }
+
+------------------------------------------------------------------------
+
+6. ecosystem.js — Node/Python Bridge
+
+The Node.js layer loads configuration with dotenv.
+
+Python executable:
+
+    process.env.PYTHON_COMMAND || "python"
+
+Python file:
+
+    path.join(__dirname, "ecosystem.py")
+
+The function:
+
+    getEcosystemData(latitude, longitude, date)
+
+creates JSON input:
+
+    {
+      "latitude": 19.076,
+      "longitude": 72.8777,
+      "date": "2026-09-05"
+    }
+
+It starts Python with spawn().
+
+The Copernicus credentials are passed to Python through environment
+variables rather than hard-coded in the JavaScript source.
+
+Python stdout handling
+
+Node:
+
+1.  collects stdout;
+2.  checks the process exit code;
+3.  rejects empty output;
+4.  parses stdout as JSON;
+5.  rejects a returned JSON error;
+6.  resolves the parsed result.
+
+Python stderr handling
+
+Python diagnostic errors are collected separately in stderr.
+
+This is important because stdout is expected to contain valid JSON.
+
+Failure cases handled by the bridge
+
+-   Python cannot start
+-   Python exits with non-zero code
+-   Python returns empty output
+-   Python returns invalid JSON
+-   Python returns a JSON error
+
+------------------------------------------------------------------------
+
+7. ecosystem.py — Data Engine
+
+The Python layer imports:
+
+    import sys
+    import json
+    import os
+    from datetime import datetime, timedelta
+    import copernicusmarine
+
+Input is read from stdin and converted to:
+
+    latitude -> float
+    longitude -> float
+    date -> string
+
+The current surface depth is:
+
+    0.4940253794193268
+
+The request uses a small spatial bounding box around the requested
+point.
+
+------------------------------------------------------------------------
+
+8. Copernicus Dataset Architecture
+
+The implementation intentionally uses two categories of data.
+
+Category A — Global Ocean Biogeochemistry Analysis and Forecast
+
+These are the primary forecast-capable ecosystem datasets:
+
+    cmems_mod_glo_bgc-pft_anfc_0.25deg_P1D-m
+    cmems_mod_glo_bgc-bio_anfc_0.25deg_P1D-m
+    cmems_mod_glo_bgc-nut_anfc_0.25deg_P1D-m
+    cmems_mod_glo_bgc-car_anfc_0.25deg_P1D-m
+    cmems_mod_glo_bgc-co2_anfc_0.25deg_P1D-m
+    cmems_mod_glo_bgc-optics_anfc_0.25deg_P1D-m
+    cmems_mod_glo_bgc-plankton_anfc_0.25deg_P1D-m
+
+They provide the main future ecosystem variables.
+
+Category B — Ocean Colour observation dataset
+
+    cmems_obs-oc_glo_bgc-transp_nrt_l3-multi-4km_P1D
+
+It provides:
+
+    SPM
+    ZSD
+    KD490
+
+This source is observational/near-real-time, not a future forecast
+source.
+
+------------------------------------------------------------------------
+
+9. Why the anfc Datasets Matter
+
+A major point clarified during development is that the existing:
+
+    cmems_mod_glo_bgc-*_anfc_0.25deg_P1D-m
+
+datasets are already the forecast-capable biogeochemistry datasets
+needed by ORCA.
+
+There is therefore no need to replace the core BGC datasets merely to
+support future dates.
+
+This was an important correction during development.
+
+------------------------------------------------------------------------
+
+10. Common Spatial/Temporal Request
+
+Each Copernicus request uses approximately +/- 0.25 degrees around the
+requested coordinate:
+
+    minimum_longitude = longitude - 0.25
+    maximum_longitude = longitude + 0.25
+
+    minimum_latitude = latitude - 0.25
+    maximum_latitude = latitude + 0.25
+
+Depth:
+
+    minimum_depth = 0.4940253794193268
+    maximum_depth = 0.4940253794193268
+
+Time:
+
+    start_datetime = requested date
+    end_datetime   = requested date
+
+The current implementation therefore targets a near-surface value for
+the requested date.
+
+------------------------------------------------------------------------
+
+11. Dataset Fetch Function
+
+The central helper is:
+
+    fetch_dataset(dataset_id, variables)
+
+It calls:
+
+    copernicusmarine.read_dataframe(
+        dataset_id=dataset_id,
+        variables=variables,
+        **COMMON_PARAMS
+    )
+
+Behavior:
+
+-   None result -> empty result
+-   empty DataFrame -> empty result
+-   successful DataFrame -> returned
+-   exception -> diagnostic printed to stderr and empty result returned
+
+This allows individual variables to become null when a particular
+dataset has no usable value.
+
+------------------------------------------------------------------------
+
+12. Value Extraction
+
+The helper:
+
+    get_value(data, variable)
+
+checks:
+
+1.  data exists;
+2.  the object has DataFrame columns;
+3.  the requested variable exists;
+4.  null values are removed;
+5.  the first valid value is returned as a float.
+
+If no valid value exists, it returns:
+
+    None
+
+which becomes:
+
+    null
+
+in JSON.
+
+Important limitation: the current code does not explicitly perform
+interpolation or an explicit nearest-grid-cell calculation. It uses the
+first valid DataFrame value from the requested bounding box.
+
+------------------------------------------------------------------------
+
+13. Ecosystem Variables
+
+13.1 Chlorophyll and Phytoplankton
+
+Dataset:
+
+    cmems_mod_glo_bgc-pft_anfc_0.25deg_P1D-m
+
+Variables:
+
+    chl
+    phyc
+
+ORCA fields:
+
+    chlorophyll_mg_m3
+    phytoplankton_mmol_m3
+
+------------------------------------------------------------------------
+
+13.2 Dissolved Oxygen and Primary Production
+
+Dataset:
+
+    cmems_mod_glo_bgc-bio_anfc_0.25deg_P1D-m
+
+Variables:
+
+    o2
+    nppv
+
+ORCA fields:
+
+    dissolved_oxygen_mg_l
+    primary_production_mg_c_m3_day
+
+The current implementation converts the oxygen value using:
+
+    oxygen * 32 / 1000
+
+before returning dissolved_oxygen_mg_l.
+
+------------------------------------------------------------------------
+
+13.3 Nutrients
+
+Dataset:
+
+    cmems_mod_glo_bgc-nut_anfc_0.25deg_P1D-m
+
+Variables:
+
+    no3
+    po4
+    si
+    fe
+
+ORCA fields:
+
+    nitrate_mmol_m3
+    phosphate_mmol_m3
+    silicate_mmol_m3
+    dissolved_iron_mmol_m3
+
+------------------------------------------------------------------------
+
+13.4 Carbon and pH
+
+Dataset:
+
+    cmems_mod_glo_bgc-car_anfc_0.25deg_P1D-m
+
+Variables:
+
+    ph
+    dissic
+    talk
+
+ORCA fields:
+
+    ph
+    dissolved_inorganic_carbon_mmol_m3
+    total_alkalinity_mmol_m3
+
+------------------------------------------------------------------------
+
+13.5 Surface CO2
+
+Dataset:
+
+    cmems_mod_glo_bgc-co2_anfc_0.25deg_P1D-m
+
+Variable:
+
+    spco2
+
+ORCA field:
+
+    surface_co2_pa
+
+------------------------------------------------------------------------
+
+13.6 Model Optical Attenuation
+
+Dataset:
+
+    cmems_mod_glo_bgc-optics_anfc_0.25deg_P1D-m
+
+Variable:
+
+    kd
+
+ORCA field:
+
+    optical_attenuation_m_inv
+
+This model optical attenuation should not automatically be treated as
+identical to satellite KD490.
+
+------------------------------------------------------------------------
+
+13.7 Zooplankton
+
+Dataset:
+
+    cmems_mod_glo_bgc-plankton_anfc_0.25deg_P1D-m
+
+Variable:
+
+    zooc
+
+ORCA field:
+
+    zooplankton_mmol_m3
+
+------------------------------------------------------------------------
+
+14. Ocean Colour
+
+Dataset:
+
+    cmems_obs-oc_glo_bgc-transp_nrt_l3-multi-4km_P1D
+
+Variables:
+
+    SPM
+    ZSD
+    KD490
+
+ORCA fields:
+
+    suspended_matter_mg_l
+    secchi_depth_m
+    kd490_m_inv
+
+------------------------------------------------------------------------
+
+14.1 Original Ocean Colour Problem
+
+The original implementation attempted to use:
+
+    OCEANCOLOUR_GLO_BGC_L3_NRT_009_101
+
+as the dataset identifier.
+
+Copernicus returned a dataset-ID error.
+
+The problem was that the product identifier was being used where the API
+expected the programming dataset identifier.
+
+------------------------------------------------------------------------
+
+14.2 Ocean Colour Fix
+
+The implementation was changed to:
+
+    cmems_obs-oc_glo_bgc-transp_nrt_l3-multi-4km_P1D
+
+and all three variables are requested in one call:
+
+    SPM
+    ZSD
+    KD490
+
+This fixed the dataset lookup problem for locations/dates with valid
+satellite observations and also reduced unnecessary remote calls.
+
+------------------------------------------------------------------------
+
+14.3 Ocean Colour Future-Date Rule
+
+Ocean Colour is observational.
+
+Therefore, for a future date:
+
+    suspended_matter_mg_l = null
+    secchi_depth_m = null
+    kd490_m_inv = null
+    ocean_colour_status = "forecast_unavailable"
+
+This is intentional.
+
+The system must not fabricate satellite forecasts.
+
+------------------------------------------------------------------------
+
+14.4 Ocean Colour Current/Historical Rule
+
+For a current or historical date, the service attempts to retrieve Ocean
+Colour observations.
+
+If all three are unavailable:
+
+    ocean_colour_status = "no_observation"
+
+If at least one is available:
+
+    ocean_colour_status = "observation_available"
+
+A null does NOT mean zero.
+
+Null can mean:
+
+-   no observation;
+-   missing observation;
+-   unavailable coverage;
+-   quality/cloud filtering;
+-   retrieval issue.
+
+------------------------------------------------------------------------
+
+15. Date Handling
+
+Python validates:
+
+    YYYY-MM-DD
+
+Example:
+
+    2026-09-05
+
+Invalid dates produce:
+
+    Invalid date. Use YYYY-MM-DD.
+
+The requested date is compared with the current UTC date.
+
+The implementation classifies the request as:
+
+    future_forecast
+    current
+    historical
+
+It also calculates:
+
+    days_from_today
+
+Example:
+
+If current UTC date is 2026-09-03 and requested date is 2026-09-05:
+
+    days_from_today = 2
+    forecast_status = future_forecast
+
+------------------------------------------------------------------------
+
+16. Forecast Metadata
+
+Python creates:
+
+    data_info
+
+containing:
+
+    requested_date
+    forecast_status
+    days_from_today
+    source
+
+Source:
+
+    Copernicus Marine Global Ocean Biogeochemistry Analysis and Forecast
+
+Important current implementation detail:
+
+The Python layer creates data_info, but ecosystemServer.js currently
+returns only:
+
+    result.ecosystem
+
+Therefore data_info is not currently exposed through the HTTP response.
+
+This should be fixed when the frontend needs explicit forecast metadata.
+
+------------------------------------------------------------------------
+
+17. Complete Ecosystem Schema
+
+The ecosystem object can contain:
+
+    chlorophyll_mg_m3
+    phytoplankton_mmol_m3
+    dissolved_oxygen_mg_l
+    primary_production_mg_c_m3_day
+    nitrate_mmol_m3
+    phosphate_mmol_m3
+    silicate_mmol_m3
+    dissolved_iron_mmol_m3
+    ph
+    dissolved_inorganic_carbon_mmol_m3
+    total_alkalinity_mmol_m3
+    surface_co2_pa
+    optical_attenuation_m_inv
+    zooplankton_mmol_m3
+    suspended_matter_mg_l
+    secchi_depth_m
+    kd490_m_inv
+    ocean_colour_status
+
+Any value can be null if the corresponding source has no usable data.
+
+------------------------------------------------------------------------
+
+18. Example Future Request
+
+Request:
+
+    GET http://localhost:3006/api/ecosystem?latitude=19.076&longitude=72.8777&date=2026-09-05
+
+Expected behavior for a future date:
+
+-   BGC forecast variables -> numeric when forecast coverage is
+    available
+-   SPM -> null
+-   Secchi depth -> null
+-   satellite KD490 -> null
+-   Ocean Colour status -> forecast_unavailable
+
+This behavior was observed during development and confirms that future
+ecosystem requests are functioning correctly.
+
+------------------------------------------------------------------------
+
+19. Test Locations
+
+The current test client contains:
+
+    Goa
+        15.4909, 73.8278
+
+    Kochi
+        9.9312, 76.2673
+
+    Chennai
+        13.0827, 80.2707
+
+    Visakhapatnam
+        17.6868, 83.2185
+
+    Kolkata
+        22.5726, 88.3639
+
+    Port Blair
+        11.6234, 92.7265
+
+Mumbai is present in the file but currently commented out:
+
+    Mumbai
+        19.0760, 72.8777
+
+------------------------------------------------------------------------
+
+20. Test Dates
+
+The current test script uses:
+
+    2026-09-01
+    2026-09-02
+    2026-09-03
+    2026-09-04
+    2026-09-05
+
+With six active locations, the current test matrix is:
+
+    6 locations x 5 dates = 30 requests
+
+------------------------------------------------------------------------
+
+21. Test Client Behavior
+
+testEcosystem.js calls:
+
+    http://localhost:3006/api/ecosystem
+
+using URLSearchParams.
+
+For each test it prints:
+
+-   location
+-   latitude
+-   longitude
+-   date
+-   HTTP status
+-   response time
+-   success
+-   ecosystem values
+
+It displays:
+
+    Chlorophyll
+    Phytoplankton
+    Dissolved Oxygen
+    Primary Production
+    Nitrate
+    Phosphate
+    Silicate
+    Iron
+    pH
+    DIC
+    Total Alkalinity
+    Surface CO2
+    Optical Attenuation
+    Zooplankton
+    Suspended Matter
+    Secchi Depth
+    KD490
+
+It stores results and prints a final successful/failed summary.
+
+There is a 1-second delay between requests.
+
+------------------------------------------------------------------------
+
+22. How to Run
+
+Start the API:
+
+    node ecosystemServer.js
+
+The server runs on:
+
+    http://localhost:3006
+
+Test a browser request:
+
+    http://localhost:3006/api/ecosystem?latitude=19.076&longitude=72.8777&date=2026-09-05
+
+Run automated tests:
+
+    node testEcosystem.js
+
+------------------------------------------------------------------------
+
+23. Problems Encountered and Fixes
+
+Problem 1 — Wrong Ocean Colour Dataset ID
+
+Symptom
+
+Copernicus reported that the dataset did not exist / the dataset ID was
+incorrect.
+
+Cause
+
+A Copernicus product ID was passed instead of the programming dataset
+ID.
+
+Fix
+
+Use:
+
+    cmems_obs-oc_glo_bgc-transp_nrt_l3-multi-4km_P1D
+
+Result
+
+SPM/ZSD/KD490 can be returned when observations are available.
+
+------------------------------------------------------------------------
+
+Problem 2 — Need for Future Ecosystem Data
+
+Requirement
+
+ORCA needs future conditions for decision support.
+
+Problem
+
+Satellite Ocean Colour cannot be treated as a future forecast source.
+
+Fix
+
+Use the existing Global Ocean Biogeochemistry Analysis and Forecast anfc
+datasets for the core ecosystem variables.
+
+Result
+
+Future requests such as 2026-09-05 return forecast ecosystem values when
+coverage exists.
+
+------------------------------------------------------------------------
+
+Problem 3 — Future Ocean Colour Values Become Null
+
+Observation
+
+For future dates:
+
+    SPM = null
+    ZSD = null
+    KD490 = null
+
+Interpretation
+
+This is correct, not a failure.
+
+Fix/Protection
+
+The API explicitly sets:
+
+    ocean_colour_status = forecast_unavailable
+
+This prevents the ORCA system from treating unavailable satellite
+observations as predicted measurements.
+
+------------------------------------------------------------------------
+
+Problem 4 — Ocean Colour Can Be Null on Historical/Current Dates
+
+Observation
+
+Some dates/locations can return null SPM/ZSD/KD490.
+
+Cause
+
+Satellite observation coverage is not guaranteed at every location/date.
+
+Correct interpretation
+
+Use:
+
+    no_observation
+
+when all three are unavailable.
+
+Do not replace null with zero.
+
+------------------------------------------------------------------------
+
+Problem 5 — Slow Response Time
+
+Observation
+
+An individual ecosystem request has taken roughly around 80–100 seconds
+in the observed development environment.
+
+Cause
+
+The implementation performs multiple remote Copernicus calls
+sequentially:
+
+1.  PFT
+2.  BIO
+3.  Nutrients
+4.  Carbon
+5.  CO2
+6.  Optics
+7.  Plankton
+8.  Ocean Colour when applicable
+
+There is also a new Python process for each API request.
+
+Impact
+
+The 30-request test matrix can take a very long time.
+
+Current optimization
+
+SPM, ZSD and KD490 are requested together in one Ocean Colour call.
+
+Recommended fixes
+
+-   parallelize independent dataset requests;
+-   add caching;
+-   add request timeouts;
+-   add retries with exponential backoff;
+-   prefetch common forecast dates;
+-   avoid requesting datasets that are not needed;
+-   consider a persistent data service instead of spawning Python for
+    every request.
+
+------------------------------------------------------------------------
+
+24. Copernicus Freshness Warning
+
+During testing, Copernicus reported warnings that a dataset version was
+being updated and very recent data could be not fully up to date.
+
+This is a freshness/update warning, not automatically an API failure.
+
+The service should eventually expose:
+
+    source
+    dataset_id
+    dataset_version
+    retrieved_at
+    forecast_initialization_time
+    forecast_valid_time
+    freshness_status
+
+This is especially important for a decision-support application.
+
+------------------------------------------------------------------------
+
+25. Scientific/Data Interpretation Rules
+
+ORCA must distinguish:
+
+Forecast model data
+
+The anfc BGC datasets provide model forecast ecosystem variables.
+
+Satellite observation data
+
+Ocean Colour SPM/ZSD/KD490 are observations.
+
+Model optical attenuation
+
+optical_attenuation_m_inv comes from the BGC optics model dataset.
+
+Satellite KD490
+
+kd490_m_inv comes from Ocean Colour.
+
+These fields should not be silently treated as identical measurements.
+
+Most importantly:
+
+    NULL != ZERO
+
+Null means unavailable/not applicable in the current source/query
+context.
+
+------------------------------------------------------------------------
+
+26. Spatial Limitation
+
+The current request uses a +/-0.25 degree bounding box and then extracts
+the first valid value.
+
+It does not currently implement:
+
+-   explicit nearest-grid-cell selection;
+-   bilinear interpolation;
+-   weighted interpolation;
+-   explicit application-level sea/land masking;
+-   spatial quality scoring.
+
+For the prototype this is acceptable.
+
+For a scientifically stronger production implementation, explicit
+spatial selection should be added.
+
+------------------------------------------------------------------------
+
+27. Depth Limitation
+
+The current service uses a fixed near-surface depth:
+
+    0.4940253794193268
+
+The API does not currently support arbitrary depths such as:
+
+    5 m
+    10 m
+    20 m
+    50 m
+
+It also does not provide a vertical profile.
+
+A future Ocean/Ecosystem Agent could request multiple depths if the use
+case requires them.
+
+------------------------------------------------------------------------
+
+28. Error Handling
+
+Dataset level
+
+A dataset exception is logged and the dataset result becomes empty.
+
+Python level
+
+Unexpected errors are returned as JSON:
+
+    {
+      "error": "..."
+    }
+
+and Python exits with a non-zero code.
+
+Node bridge
+
+Node handles:
+
+-   process start failure;
+-   non-zero process exit;
+-   empty output;
+-   invalid JSON;
+-   returned JSON errors.
+
+Express
+
+The server converts bridge failures into HTTP 500.
+
+This is layered error handling, but it should be strengthened with
+timeout/retry logic for production.
+
+------------------------------------------------------------------------
+
+29. Validation Limitations
+
+The Express layer validates coordinate ranges.
+
+The Python layer validates the date format.
+
+The Express layer currently checks that date exists but does not perform
+the full date-format validation itself.
+
+A future version should return a clean HTTP 400 for invalid date formats
+before making a Copernicus request.
+
+------------------------------------------------------------------------
+
+30. Security
+
+The .env file contains Copernicus credentials.
+
+Those credentials must be treated as secrets.
+
+Never:
+
+-   commit .env to GitHub;
+-   expose credentials to the frontend;
+-   hard-code credentials into source files;
+-   return credentials from an API response;
+-   publish credentials in documentation.
+
+Recommended .gitignore:
+
+    .env
+    .env.*
+    !.env.example
+
+Recommended example file:
+
+    COPERNICUSMARINE_SERVICE_USERNAME=
+    COPERNICUSMARINE_SERVICE_PASSWORD=
+    PORT=3006
+    PYTHON_COMMAND=python
+
+If real credentials were ever committed to a public/shared repository,
+rotate them.
+
+------------------------------------------------------------------------
+
+31. Current API Contract
+
+Request
+
+    GET /api/ecosystem
+
+Parameters:
+
+    latitude: number
+    longitude: number
+    date: YYYY-MM-DD
+
+Example:
+
+    /api/ecosystem?latitude=19.076&longitude=72.8777&date=2026-09-05
+
+Response
+
+    {
+      "success": true,
+      "location": {
+        "latitude": 19.076,
+        "longitude": 72.8777
+      },
+      "request": {
+        "date": "2026-09-05"
+      },
+      "ecosystem": {
+        "chlorophyll_mg_m3": 0.0,
+        "phytoplankton_mmol_m3": 0.0,
+        "dissolved_oxygen_mg_l": 0.0,
+        "primary_production_mg_c_m3_day": 0.0,
+        "nitrate_mmol_m3": 0.0,
+        "phosphate_mmol_m3": 0.0,
+        "silicate_mmol_m3": 0.0,
+        "dissolved_iron_mmol_m3": 0.0,
+        "ph": 0.0,
+        "dissolved_inorganic_carbon_mmol_m3": 0.0,
+        "total_alkalinity_mmol_m3": 0.0,
+        "surface_co2_pa": 0.0,
+        "optical_attenuation_m_inv": 0.0,
+        "zooplankton_mmol_m3": 0.0,
+        "suspended_matter_mg_l": null,
+        "secchi_depth_m": null,
+        "kd490_m_inv": null,
+        "ocean_colour_status": "forecast_unavailable"
+      }
+    }
+
+The numeric values in this example are schema placeholders, not
+measurements.
+
+------------------------------------------------------------------------
+
+32. Status Values
+
+Forecast status:
+
+    future_forecast
+    current
+    historical
+
+Ocean Colour status:
+
+    forecast_unavailable
+    no_observation
+    observation_available
+
+These statuses are important for safe downstream reasoning.
+
+------------------------------------------------------------------------
+
+33. Recommended HTTP Response Improvement
+
+The Python layer already creates data_info.
+
+The next response version should expose it:
+
+    {
+      "success": true,
+      "location": {
+        "latitude": 19.076,
+        "longitude": 72.8777
+      },
+      "request": {
+        "date": "2026-09-05"
+      },
+      "data_info": {
+        "requested_date": "2026-09-05",
+        "forecast_status": "future_forecast",
+        "days_from_today": 2,
+        "source": "Copernicus Marine Global Ocean Biogeochemistry Analysis and Forecast"
+      },
+      "ecosystem": {
+        "...": "..."
+      }
+    }
+
+This will make frontend and agent integration easier.
+
+------------------------------------------------------------------------
+
+34. Recommended Production Metadata
+
+Eventually, each dataset/field should ideally have provenance
+information such as:
+
+    value
+    unit
+    source
+    dataset_id
+    data_type
+    valid_time
+    retrieved_at
+    forecast_initialization
+    confidence
+
+For the current prototype, the flat ecosystem response is simpler.
+
+------------------------------------------------------------------------
+
+35. Ecosystem Agent Integration
+
+The Ecosystem Agent should interpret the returned fields by category.
+
+Biological state
+
+-   chlorophyll
+-   phytoplankton
+-   primary production
+-   zooplankton
+
+Nutrient state
+
+-   nitrate
+-   phosphate
+-   silicate
+-   dissolved iron
+
+Oxygen state
+
+-   dissolved oxygen
+
+Carbonate state
+
+-   pH
+-   DIC
+-   alkalinity
+-   surface CO2
+
+Optical state
+
+-   model optical attenuation
+-   satellite SPM
+-   satellite Secchi depth
+-   satellite KD490
+
+Temporal state
+
+-   historical
+-   current
+-   future forecast
+
+Data availability
+
+-   Ocean Colour status
+
+------------------------------------------------------------------------
+
+36. Risk Agent Integration
+
+The Risk Agent should combine ecosystem data with:
+
+-   Weather
+-   Ocean conditions
+-   currents
+-   waves
+-   wind
+-   Tide
+-   GIS
+-   PFZ
+-   marine activity
+
+The Ecosystem API should provide environmental evidence, not make the
+final operational decision.
+
+One variable alone should not determine risk.
+
+------------------------------------------------------------------------
+
+37. Decision Agent Integration
+
+Conceptual ORCA flow:
+
+    User location + activity + date
+                 |
+                 +--> Weather Agent
+                 +--> Ocean Agent
+                 +--> Ecosystem Agent
+                 +--> Tide
+                 +--> PFZ
+                 +--> GIS
+                           |
+                           v
+                       Risk Agent
+                           |
+                           v
+                     Decision Agent
+                           |
+                           v
+                     Recommendation
+
+The Ecosystem API is therefore one component of the complete decision
+pipeline.
+
+------------------------------------------------------------------------
+
+38. Frontend Integration
+
+The planned ORCA website uses:
+
+-   Next.js
+-   React
+-   TypeScript
+-   Tailwind CSS
+-   Leaflet / React-Leaflet
+-   Recharts
+
+The frontend can request:
+
+    /api/ecosystem?latitude=...&longitude=...&date=...
+
+Recommended dashboard cards:
+
+1.  Ecosystem overview
+2.  Chlorophyll
+3.  Primary production
+4.  Dissolved oxygen
+5.  Nutrients
+6.  pH/carbon chemistry
+7.  Phytoplankton/zooplankton
+8.  Optical conditions
+9.  Data source/status
+10. Forecast date
+
+Future dates should have a clear FORECAST indicator.
+
+Future satellite Ocean Colour fields should display:
+
+    Forecast unavailable
+
+rather than zero.
+
+------------------------------------------------------------------------
+
+39. Map Integration
+
+When a user selects a marine location:
+
+1.  obtain latitude/longitude;
+2.  select a date;
+3.  call the Ecosystem API;
+4.  display ecosystem metrics;
+5.  combine with Weather/Ocean/Tide/PFZ/GIS;
+6.  send normalized information to the agent layer.
+
+The frontend should never access Copernicus credentials directly.
+
+------------------------------------------------------------------------
+
+40. Recommended Normalized Agent Object
+
+Before agent reasoning, ORCA should normalize:
+
+-   units
+-   missing values
+-   source type
+-   date
+-   location
+-   forecast/observation classification
+
+Suggested internal structure:
+
+    {
+      "location": {
+        "latitude": 19.076,
+        "longitude": 72.8777
+      },
+      "time": {
+        "requested_date": "2026-09-05",
+        "status": "future_forecast"
+      },
+      "ecosystem": {
+        "...": "..."
+      },
+      "data_quality": {
+        "ocean_colour_status": "forecast_unavailable"
+      }
+    }
+
+------------------------------------------------------------------------
+
+41. Complete Current Limitations
+
+1.  Sequential remote dataset requests make the service slow.
+2.  No application cache.
+3.  No retry/backoff.
+4.  No explicit request timeout.
+5.  A new Python process is spawned for every API request.
+6.  Spatial extraction currently uses the first valid DataFrame value.
+7.  No explicit interpolation.
+8.  Fixed near-surface depth.
+9.  No depth-profile support.
+10. Ocean Colour has no future forecast source in this implementation.
+11. Ocean Colour can be unavailable for current/historical dates.
+12. Limited freshness metadata.
+13. Dataset IDs are hard-coded.
+14. Python data_info is not currently exposed by the Express response.
+15. Express validates date presence but not full date format.
+16. No rate limiting.
+17. No API authentication for the local service.
+18. No persistent result store.
+19. No structured logging.
+20. No production metrics/observability.
+21. No automatic forecast-coverage check.
+22. Test script is sequential.
+23. No formal scientific range validation.
+24. No automated data-quality scoring.
+25. No activity-specific ecosystem suitability score.
+26. No ecosystem confidence score.
+
+------------------------------------------------------------------------
+
+42. Features NOT Yet Implemented
+
+Do not claim that the current Ecosystem API provides:
+
+-   validated fish abundance;
+-   validated fishing suitability;
+-   PFZ probability;
+-   ecosystem health score;
+-   biodiversity score;
+-   harmful algal bloom prediction;
+-   marine pollution prediction;
+-   oxygen anomaly prediction;
+-   activity-specific recommendation;
+-   ecosystem confidence score;
+-   current tidal state;
+-   tidal current velocity;
+-   future satellite SPM;
+-   future satellite Secchi depth;
+-   future satellite KD490.
+
+These require additional logic/data and are not currently produced by
+this API.
+
+------------------------------------------------------------------------
+
+43. Development History
+
+Stage 1
+
+Initial Copernicus ecosystem datasets were connected.
+
+Stage 2
+
+Core biogeochemistry variables successfully returned data.
+
+Stage 3
+
+Ocean Colour integration was attempted.
+
+Stage 4
+
+Ocean Colour failed because a product ID was used as a programming
+dataset ID.
+
+Stage 5
+
+The correct Ocean Colour dataset was identified.
+
+Stage 6
+
+SPM/ZSD/KD490 were requested together.
+
+Stage 7
+
+The project requirement for future ecosystem data was clarified.
+
+Stage 8
+
+The existing anfc BGC datasets were confirmed as the forecast-capable
+source.
+
+Stage 9
+
+Future-date classification was added.
+
+Stage 10
+
+Future Ocean Colour was prevented from being interpreted as a forecast.
+
+Stage 11
+
+A future request such as 2026-09-05 successfully returned forecast BGC
+values while Ocean Colour correctly returned:
+
+    ocean_colour_status = forecast_unavailable
+
+This is the current architecture.
+
+------------------------------------------------------------------------
+
+44. Current Test Checklist
+
+Service
+
+-   ☐ Start server
+-   ☐ GET /
+-   ☐ Confirm port 3006
+
+Valid locations
+
+-   ☐ Goa
+-   ☐ Kochi
+-   ☐ Chennai
+-   ☐ Visakhapatnam
+-   ☐ Kolkata
+-   ☐ Port Blair
+-   ☐ Mumbai
+
+Dates
+
+-   ☐ historical
+-   ☐ current
+-   ☐ tomorrow
+-   ☐ +2 days
+-   ☐ +5 days
+-   ☐ +10 days if forecast coverage exists
+
+Validation
+
+-   ☐ latitude = 999
+-   ☐ latitude = -999
+-   ☐ longitude = 999
+-   ☐ longitude = -999
+-   ☐ missing latitude
+-   ☐ missing longitude
+-   ☐ missing date
+-   ☐ invalid date
+-   ☐ invalid date format
+
+Data availability
+
+-   ☐ BGC forecast values present
+-   ☐ Ocean Colour observation available
+-   ☐ Ocean Colour unavailable
+-   ☐ future Ocean Colour marked forecast_unavailable
+
+Failure cases
+
+-   ☐ Copernicus unavailable
+-   ☐ invalid credentials
+-   ☐ Python unavailable
+-   ☐ ecosystem.py missing
+-   ☐ invalid Python JSON
+-   ☐ empty Python response
+-   ☐ empty dataset
+
+------------------------------------------------------------------------
+
+45. Test Client Limitations
+
+The current test client is useful for development but is not a
+production load test.
+
+It:
+
+-   runs requests sequentially;
+-   waits one second between requests;
+-   has no request timeout;
+-   has no retry;
+-   does not persist results;
+-   does not compare values against expected scientific ranges;
+-   does not calculate completeness;
+-   does not classify forecast/observation status in the final summary.
+
+A better test report should contain:
+
+    location
+    date
+    success
+    response_time_ms
+    forecast_status
+    ocean_colour_status
+    missing_field_count
+    dataset_failures
+
+------------------------------------------------------------------------
+
+46. Recommended Improvement Order
+
+Priority 1
+
+Expose data_info in the HTTP response.
+
+Priority 2
+
+Parallelize independent Copernicus requests.
+
+Priority 3
+
+Add caching.
+
+Priority 4
+
+Add timeout and retry/backoff.
+
+Priority 5
+
+Improve grid-cell selection/interpolation.
+
+Priority 6
+
+Add source/dataset/retrieval metadata.
+
+Priority 7
+
+Add structured schema validation.
+
+Priority 8
+
+Build Ecosystem Agent reasoning.
+
+Priority 9
+
+Integrate with Risk Agent.
+
+Priority 10
+
+Integrate with Decision Agent.
+
+Priority 11
+
+Connect to the Next.js dashboard.
+
+------------------------------------------------------------------------
+
+47. Current Status
+
+WORKING PROTOTYPE
+
+Currently working:
+
+    [OK] Express ecosystem server
+    [OK] Coordinate validation
+    [OK] Date input
+    [OK] Node -> Python communication
+    [OK] Copernicus credentials through environment variables
+    [OK] BGC forecast datasets
+    [OK] Chlorophyll
+    [OK] Phytoplankton
+    [OK] Dissolved oxygen
+    [OK] Primary production
+    [OK] Nitrate
+    [OK] Phosphate
+    [OK] Silicate
+    [OK] Dissolved iron
+    [OK] pH
+    [OK] DIC
+    [OK] Total alkalinity
+    [OK] Surface CO2
+    [OK] Model optical attenuation
+    [OK] Zooplankton
+    [OK] Ocean Colour dataset
+    [OK] SPM when observation exists
+    [OK] Secchi depth when observation exists
+    [OK] KD490 when observation exists
+    [OK] Future-date classification
+    [OK] Future Ocean Colour protection
+    [OK] Automated multi-location testing
+
+------------------------------------------------------------------------
+
+48. What the Current Implementation Proves
+
+The current implementation proves that ORCA can:
+
+1.  accept a marine coordinate;
+2.  accept a requested date;
+3.  reach the Ecosystem service;
+4.  call Copernicus Marine;
+5.  retrieve forecast-capable biogeochemistry data;
+6.  transform selected values into ORCA field names;
+7.  return ecosystem JSON;
+8.  distinguish future/current/historical requests;
+9.  prevent missing future Ocean Colour observations from being treated
+    as forecasts;
+10. test multiple Indian coastal locations.
+
+This is a strong prototype foundation for the Ecosystem Agent.
+
+------------------------------------------------------------------------
+
+49. Final Architecture
+
+                        ORCA WEBSITE
+                             |
+                             v
+                  +----------------------+
+                  | Ecosystem API :3006  |
+                  |   Express / Node.js  |
+                  +----------+-----------+
+                             |
+                             v
+                  +----------------------+
+                  | ecosystem.js         |
+                  | Node -> Python       |
+                  +----------+-----------+
+                             |
+                             v
+                  +----------------------+
+                  | ecosystem.py         |
+                  | Copernicus Marine    |
+                  +----------+-----------+
+                             |
+              +--------------+----------------+
+              |              |                |
+              v              v                v
+       BGC Forecast    Ocean Colour     Date classification
+       anfc datasets   observations
+              |              |                |
+              +--------------+----------------+
+                             |
+                             v
+                     Ecosystem JSON
+                             |
+                             v
+                     Ecosystem Agent
+                             |
+                             v
+                       Risk Agent
+                             |
+                             v
+                     Decision Agent
+
+------------------------------------------------------------------------
+
+50. Final Conclusion
+
+The ORCA Ecosystem API is currently a functional, forecast-oriented
+marine ecosystem data service.
+
+Its most important architectural decision is the separation between:
+
+1.  forecast-capable biogeochemistry data, and
+2.  observation-only Ocean Colour data.
+
+The anfc BGC datasets provide the future ecosystem variables needed by
+ORCA.
+
+Ocean Colour remains an observation source, so future SPM/ZSD/KD490
+values are explicitly marked unavailable instead of being fabricated.
+
+The major historical integration problem was the incorrect Ocean Colour
+dataset identifier. That was fixed by using the correct programming
+dataset and requesting SPM, ZSD, and KD490 together.
+
+The largest remaining engineering issue is performance because multiple
+remote Copernicus requests are made sequentially and Python is spawned
+for each request.
+
+The next technical improvements should therefore focus on:
+
+-   parallel requests;
+-   caching;
+-   retries/timeouts;
+-   better spatial selection;
+-   source/freshness metadata;
+-   exposing data_info;
+-   and then integrating the service with the Ecosystem, Risk, and
+    Decision agents.
+
+For the SIH26176 prototype, this implementation provides a solid
+ecosystem-data foundation for the larger ORCA marine intelligence
+platform.
+
+------------------------------------------------------------------------
+
+END OF DOCUMENT
