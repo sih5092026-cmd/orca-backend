@@ -1,0 +1,12 @@
+{
+  "name": "fetch-ecosystem",
+  "version": "1.0.0",
+  "main": "ecosystemServer.js",
+  "scripts": {
+    "start": "node ecosystemServer.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "cors": "^2.8.5"
+  }
+}

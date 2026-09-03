@@ -1,0 +1,12 @@
+{
+  "name": "fetch-tide",
+  "version": "1.0.0",
+  "main": "tide.js",
+  "scripts": {
+    "start": "node tide.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "cors": "^2.8.5"
+  }
+}

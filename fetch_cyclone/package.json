@@ -1,0 +1,11 @@
+{
+  "name": "fetch-cyclone",
+  "version": "1.0.0",
+  "main": "cyclone.js",
+  "scripts": {
+    "start": "node cyclone.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
