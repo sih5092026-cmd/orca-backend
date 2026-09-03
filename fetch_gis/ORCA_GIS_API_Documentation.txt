@@ -1,0 +1,1155 @@
+ORCA GIS API — COMPLETE TECHNICAL DOCUMENTATION
+===================================================
+
+Project: SIH26176 — ORCA
+Service: ORCA GIS Service
+Port: 3005
+Main API:
+    GET http://localhost:3005/api/gis
+
+Purpose
+-------
+This GIS service receives a latitude/longitude and combines local GIS datasets
+to produce marine/geographic information used by the ORCA decision-support
+system.
+
+The service currently provides:
+1. Distance from coastline
+2. Water depth
+3. Marine protected-area information
+4. Distance to India's EEZ boundary
+5. Nearest Indian port
+6. India maritime/fishing-zone classification
+7. Placeholder fields for restricted-zone functionality
+8. Coordinate validation
+
+IMPORTANT:
+The service is a GIS/data-enrichment service. It does NOT by itself decide
+whether a fishing activity is legally permitted or safe. The returned
+maritime zone should be used as an input to ORCA's risk/decision logic.
+
+
+===================================================
+1. SERVER / ENDPOINT
+===================================================
+
+Server:
+    http://localhost:3005
+
+Health check:
+    GET http://localhost:3005/
+
+Expected:
+    {
+      "success": true,
+      "service": "ORCA GIS Service",
+      "port": 3005
+    }
+
+Main GIS endpoint:
+    GET http://localhost:3005/api/gis?latitude=<LAT>&longitude=<LON>
+
+Example:
+    http://localhost:3005/api/gis?latitude=18.8&longitude=72.5
+
+The server uses:
+    Express
+    CORS
+    JSON middleware
+
+Source:
+    gisServer.js
+
+
+===================================================
+2. INPUT PARAMETERS
+===================================================
+
+Required query parameters:
+
+latitude
+    Type: number
+    Range: -90 to 90
+    Meaning: geographic latitude in decimal degrees
+
+longitude
+    Type: number
+    Range: -180 to 180
+    Meaning: geographic longitude in decimal degrees
+
+Example:
+    ?latitude=18.8&longitude=72.5
+
+The server converts both values using Number() and validates:
+    - numeric value
+    - latitude range
+    - longitude range
+
+Invalid input returns HTTP 400.
+
+Examples:
+
+    /api/gis?longitude=72.5
+
+Response:
+    {
+      "success": false,
+      "error": "latitude and longitude are required"
+    }
+
+    /api/gis?latitude=999&longitude=72.5
+
+Response:
+    {
+      "success": false,
+      "error": "Invalid latitude or longitude"
+    }
+
+
+===================================================
+3. RESPONSE STRUCTURE
+===================================================
+
+Successful response:
+
+{
+  "success": true,
+  "location": {
+    "latitude": 18.8,
+    "longitude": 72.5
+  },
+  "gis": {
+    "coast_distance_km": 32.71,
+    "water_depth_m": 34,
+    "nearest_restricted_zone_km": null,
+    "inside_restricted_zone": null,
+    "inside_marine_protected_area": false,
+    "nearest_marine_protected_area_km": 53.44,
+    "nearest_marine_protected_area": {
+      "name": "Thane Creek",
+      "wdpa_id": 555795371,
+      "designation": "Wetland of International Importance (Ramsar Site)",
+      "site_type": "PA",
+      "iucn_category": "Not Reported"
+    },
+    "nearest_maritime_boundary_km": 33.92,
+    "nearest_port_km": 39.81,
+    "fishing_zone": {
+      "zone": "Contiguous Zone",
+      "name": "India Contiguous Zone",
+      "country": "India",
+      "status": "inside",
+      "distance_limit_nm": 24,
+      "dataset": "Marine Regions World 24NM v4",
+      "zone_id": 49426
+    },
+    "location_valid": true,
+    "nearest_port": {
+      "port_id": 4,
+      "name": "Mumbai Port",
+      "state": "Maharashtra",
+      "port_type": "Major Port",
+      "latitude": 18.949,
+      "longitude": 72.844
+    }
+  }
+}
+
+
+===================================================
+4. FIELD-BY-FIELD DOCUMENTATION
+===================================================
+
+4.1 coast_distance_km
+---------------------
+Type:
+    number | null
+
+Meaning:
+    Distance from the requested coordinate to the nearest loaded coastline
+    feature, in kilometres.
+
+Source:
+    Natural Earth coastline shapefile:
+    data/coastline/ne_10m_coastline.shp
+
+How calculated:
+    1. Load LineString/MultiLineString coastline features.
+    2. Convert the requested coordinate into a Turf point.
+    3. For every coastline feature, calculate the nearest point on the line
+       using Turf nearestPointOnLine().
+    4. Read nearest.properties.dist.
+    5. Keep the minimum distance.
+    6. Round to 2 decimal places.
+
+Important:
+    This is a geographic distance to the Natural Earth coastline dataset.
+    It is NOT the legal maritime baseline distance.
+
+If no valid coastline distance can be calculated:
+    null
+
+
+4.2 water_depth_m
+-----------------
+Type:
+    number | null
+
+Meaning:
+    Estimated water depth at the requested coordinate in metres.
+
+Source:
+    GEBCO GeoTIFF:
+    data/gebco/gebco_2026_n25.0_s0.0_w65.0_e100.0_geotiff.tif
+
+How calculated:
+    1. Read the GeoTIFF bounding box.
+    2. Check whether longitude/latitude is inside the raster extent.
+    3. Convert longitude/latitude to raster x/y indices.
+    4. Read the corresponding raster elevation value.
+    5. GEBCO interpretation:
+         negative = underwater
+         positive = land
+    6. If elevation >= 0:
+         return 0
+       Otherwise:
+         return absolute value of elevation.
+    7. Round water depth to 2 decimal places.
+
+Therefore:
+    Land -> 0 m
+    Sea -> positive depth in metres
+
+If coordinate is outside the GeoTIFF:
+    null
+
+Important:
+    The value is based on the raster cell containing the coordinate and is
+    not a nautical-chart sounding.
+
+
+4.3 nearest_restricted_zone_km
+------------------------------
+Current value:
+    null
+
+Status:
+    NOT IMPLEMENTED
+
+There is currently no restricted-zone dataset or calculation connected to
+this field.
+
+Do NOT treat null as:
+    "there is no restricted zone nearby"
+
+It means:
+    "this functionality has not been implemented/populated."
+
+
+4.4 inside_restricted_zone
+--------------------------
+Current value:
+    null
+
+Status:
+    NOT IMPLEMENTED
+
+No restricted-area point-in-polygon test is currently performed.
+
+Future implementation should:
+    - load an appropriate restricted/prohibited area dataset
+    - determine whether the coordinate is inside a restricted polygon
+    - calculate distance to the nearest restricted boundary/zone
+
+
+4.5 inside_marine_protected_area
+--------------------------------
+Type:
+    boolean
+
+Meaning:
+    Whether the coordinate lies inside at least one loaded marine/coastal
+    protected area.
+
+Source:
+    WDPA data:
+    data/protected_areas/part0/
+    data/protected_areas/part1/
+    data/protected_areas/part2/
+
+How data is loaded:
+    - Search each part directory for a file ending in "-polygons.shp".
+    - Read Polygon and MultiPolygon geometries.
+    - Keep only areas classified as marine/coastal.
+
+Marine/coastal filtering:
+    The dataset does not contain a MARINE field.
+    The code checks:
+       REP_M_AREA > 0
+       OR GIS_M_AREA > 0
+       OR REALM contains "marine"
+
+How inside is calculated:
+    1. Create Turf point [longitude, latitude].
+    2. For every protected-area Polygon/MultiPolygon:
+         booleanPointInPolygon(point, polygon)
+    3. If any area contains the point:
+         inside_marine_protected_area = true
+
+Overlapping protected areas:
+    The code does NOT stop at the first match. This allows overlapping
+    protected areas to be considered.
+
+
+4.6 nearest_marine_protected_area_km
+------------------------------------
+Type:
+    number | null
+
+Meaning:
+    Distance in kilometres from the requested coordinate to the boundary of
+    the nearest loaded marine/coastal protected area.
+
+How calculated:
+    1. For each protected area that does not contain the point:
+       convert Polygon/MultiPolygon to a line using polygonToLine().
+    2. Use Turf nearestPointOnLine().
+    3. Read nearest.properties.dist in kilometres.
+    4. Keep the smallest distance.
+    5. Round to 2 decimal places.
+
+If the point is inside a protected area:
+    nearest distance becomes 0.
+
+If no usable protected-area boundary exists:
+    null.
+
+
+4.7 nearest_marine_protected_area
+---------------------------------
+Type:
+    object | null
+
+Returned object:
+
+    {
+      "name": "...",
+      "wdpa_id": "...",
+      "designation": "...",
+      "site_type": "...",
+      "iucn_category": "..."
+    }
+
+Fields come from WDPA properties:
+
+name:
+    NAME_ENG, otherwise NAME
+
+wdpa_id:
+    SITE_ID, otherwise SITE_PID
+
+designation:
+    DESIG_ENG, otherwise DESIG
+
+site_type:
+    SITE_TYPE
+
+iucn_category:
+    IUCN_CAT
+
+Important:
+    The returned area is the nearest area according to the boundary-distance
+    calculation, except when the point is inside an area, where that area is
+    selected and distance is 0.
+
+
+4.8 nearest_maritime_boundary_km
+--------------------------------
+Type:
+    number | null
+
+CURRENT MEANING:
+    Distance from the requested coordinate to the nearest boundary of the
+    INDIA EEZ shapefile.
+
+Source:
+    data/maritime/india/india_eez.shp
+
+How calculated:
+    1. Load all Polygon/MultiPolygon features from india_eez.shp.
+    2. Convert each polygon to a boundary line using polygonToLine().
+    3. Create Turf point [longitude, latitude].
+    4. For every EEZ boundary:
+         nearestPointOnLine(..., units="kilometers")
+    5. Keep the smallest distance.
+    6. Round to 2 decimals.
+
+IMPORTANT NAMING NOTE:
+    The current response key is:
+        nearest_maritime_boundary_km
+
+    But the implementation actually measures:
+        nearest India EEZ boundary
+
+    It does NOT currently calculate the nearest maritime boundary of every
+    country or every maritime zone.
+
+Recommended future rename:
+    nearest_india_eez_boundary_km
+
+
+4.9 nearest_port_km
+-------------------
+Type:
+    number | null
+
+Meaning:
+    Straight-line great-circle distance from the requested coordinate to the
+    nearest port in the local Indian port dataset.
+
+Source:
+    data/ports/indian_ports.json
+
+How calculated:
+    1. Load the JSON array.
+    2. Keep entries with numeric latitude/longitude.
+    3. For every port, calculate Haversine distance.
+    4. Keep the smallest distance.
+    5. Round to 2 decimal places.
+
+Haversine:
+    Earth radius R = 6371 km.
+
+The calculation uses:
+    latitude
+    longitude
+    spherical distance
+
+This is NOT road distance or sailing-route distance.
+
+
+4.10 nearest_port
+-----------------
+Type:
+    object | null
+
+Returned fields:
+
+    port_id
+    name
+    state
+    port_type
+    latitude
+    longitude
+
+The selected port is the port with the minimum Haversine distance.
+
+If no valid ports exist:
+    nearest_port = null
+    nearest_port_km = null
+
+
+4.11 fishing_zone
+-----------------
+Type:
+    object
+
+Purpose:
+    Classify the coordinate against India's local maritime-zone shapefiles.
+
+Datasets:
+
+12 NM:
+    data/maritime/india/india_12nm.shp
+
+24 NM:
+    data/maritime/india/india_24nm.shp
+
+EEZ:
+    data/maritime/india/india_eez.shp
+
+
+Zone checking order:
+    1. 12 NM
+    2. 24 NM
+    3. EEZ
+    4. Outside India EEZ
+
+The first containing polygon wins.
+
+12 NM result:
+    {
+      "zone": "Territorial Waters",
+      "name": "India Territorial Sea",
+      "country": "India",
+      "status": "inside",
+      "distance_limit_nm": 12,
+      "dataset": "Marine Regions World 12NM v4",
+      "zone_id": <dataset ID>
+    }
+
+24 NM result:
+    {
+      "zone": "Contiguous Zone",
+      "name": "India Contiguous Zone",
+      "country": "India",
+      "status": "inside",
+      "distance_limit_nm": 24,
+      "dataset": "Marine Regions World 24NM v4",
+      "zone_id": <dataset ID>
+    }
+
+EEZ result:
+    {
+      "zone": "EEZ",
+      "name": "India Exclusive Economic Zone",
+      "country": "India",
+      "status": "inside",
+      "distance_limit_nm": 200,
+      "dataset": "Marine Regions World EEZ v12",
+      "zone_id": <dataset ID>
+    }
+
+Outside result:
+    {
+      "zone": "Outside India EEZ",
+      "name": null,
+      "country": null,
+      "status": "outside_india_jurisdiction",
+      "distance_limit_nm": null,
+      "dataset": "Marine Regions",
+      "zone_id": null
+    }
+
+
+===================================================
+5. HOW FISHING-ZONE GEOMETRY IS CHECKED
+===================================================
+
+The code does NOT calculate:
+    distance from coastline <= 12 NM
+    distance from coastline <= 24 NM
+    distance from coastline <= 200 NM
+
+Instead it uses the actual supplied maritime polygons.
+
+Algorithm:
+
+    input latitude/longitude
+             |
+             v
+    Turf point([longitude, latitude])
+             |
+             v
+    Bounding-box pre-check
+             |
+             v
+    Turf booleanPointInPolygon()
+             |
+       +-----+-----+
+       |           |
+     match       no match
+       |           |
+       v           v
+    return       next polygon
+       |
+       v
+    next zone if no polygon matched
+
+Bounding boxes are calculated once when shapefiles are loaded. This avoids
+running Turf's polygon calculation for polygons whose bounding boxes clearly
+do not contain the point.
+
+
+===================================================
+6. MARITIME SHAPEFILE LOADING
+===================================================
+
+Each maritime shapefile is opened using the Node "shapefile" package.
+
+Only:
+    Polygon
+    MultiPolygon
+
+geometries are accepted.
+
+For each feature:
+    - geometry is checked
+    - bounding box is calculated
+    - feature + bounding box are cached
+
+The service uses an in-memory cache.
+
+After successful loading:
+    loaded = true
+
+If another request arrives while data is loading:
+    it waits for the existing loading promise.
+
+The current corrected implementation also resets the loading promise if
+loading fails, allowing a later request to retry.
+
+
+===================================================
+7. ZONE ID
+===================================================
+
+The code tries these property fields in order:
+
+    MRGID
+    MRGID_EEZ
+    MRGID_TER1
+    MRGID_TER2
+    GEONAME
+    SOVEREIGN1
+    TERRITORY1
+    ID
+    OBJECTID
+
+The first non-empty property is returned as zone_id.
+
+This means zone_id depends on the actual attributes present in the shapefile.
+
+
+===================================================
+8. MAIN GIS PROCESSING FLOW
+===================================================
+
+GET /api/gis
+       |
+       v
+Validate latitude/longitude
+       |
+       v
+getGISData(latitude, longitude)
+       |
+       +-----------------------------+
+       |                             |
+       v                             v
+Parallel GIS calculations
+       |
+       +--> Coast distance
+       |
+       +--> GEBCO water depth
+       |
+       +--> Marine protected area
+       |
+       +--> India EEZ boundary distance
+       |
+       v
+Nearest port calculation
+       |
+       v
+getFishingZone(latitude, longitude)
+       |
+       +--> 12 NM
+       +--> 24 NM
+       +--> EEZ
+       +--> Outside India EEZ
+       |
+       v
+Combine into final JSON
+       |
+       v
+HTTP response
+
+
+===================================================
+9. CURRENT DATASETS
+===================================================
+
+A. Coastline
+-----------
+File:
+    data/coastline/ne_10m_coastline.shp
+
+Used for:
+    coast_distance_km
+
+Geometry:
+    LineString / MultiLineString
+
+
+B. GEBCO
+--------
+File:
+    data/gebco/gebco_2026_n25.0_s0.0_w65.0_e100.0_geotiff.tif
+
+Used for:
+    water_depth_m
+
+Coverage encoded by the filename:
+    north 25.0
+    south 0.0
+    west 65.0
+    east 100.0
+
+
+C. Indian ports
+---------------
+File:
+    data/ports/indian_ports.json
+
+Used for:
+    nearest_port_km
+    nearest_port
+
+
+D. Marine protected areas
+-------------------------
+Directories:
+    data/protected_areas/part0
+    data/protected_areas/part1
+    data/protected_areas/part2
+
+Used for:
+    inside_marine_protected_area
+    nearest_marine_protected_area_km
+    nearest_marine_protected_area
+
+
+E. India 12 NM
+--------------
+File:
+    data/maritime/india/india_12nm.shp
+
+Used for:
+    Territorial Waters classification
+
+
+F. India 24 NM
+--------------
+File:
+    data/maritime/india/india_24nm.shp
+
+Used for:
+    Contiguous Zone classification
+
+
+G. India EEZ
+------------
+File:
+    data/maritime/india/india_eez.shp
+
+Used for:
+    EEZ classification
+    nearest India EEZ boundary distance
+
+
+===================================================
+10. DATA/FIELDS STILL LEFT TO IMPLEMENT
+===================================================
+
+The following fields are present in the API response but are NOT currently
+populated:
+
+1. nearest_restricted_zone_km
+   Current:
+       null
+   Required future data:
+       restricted/prohibited-zone spatial dataset
+
+2. inside_restricted_zone
+   Current:
+       null
+   Required future logic:
+       point-in-polygon check against restricted zones
+
+Other useful GIS fields that are NOT currently returned by this service:
+
+3. location_name
+   No reverse-geocoding service is implemented here.
+
+4. marine_zone as a general country-aware field
+   Current fishing_zone is India-only.
+
+5. nearest_country_maritime_boundary
+   Not implemented.
+
+6. foreign-country EEZ / territorial-water classification
+   Not implemented.
+
+7. legal fishing permission
+   Not implemented.
+   A geographic zone alone does not determine permission.
+
+8. vessel-specific restrictions
+   Not implemented.
+
+9. seasonal fishing closures
+   Not implemented.
+
+10. dynamic navigation/safety restrictions
+    Not implemented.
+
+
+===================================================
+11. IMPORTANT LIMITATIONS
+===================================================
+
+1. INDIA-ONLY MARITIME CLASSIFICATION
+-------------------------------------
+The fishing-zone module uses:
+    India 12 NM
+    India 24 NM
+    India EEZ
+
+If a coordinate is in Sri Lankan, Pakistani, Bangladeshi, Myanmar, or another
+country's waters, the current service can only say:
+
+    Outside India EEZ
+
+It does not identify the foreign country's maritime zone.
+
+
+2. LAND IS CURRENTLY REPORTED AS OUTSIDE INDIA EEZ
+--------------------------------------------------
+A land coordinate is not inside the maritime polygons, so fishing_zone can
+return:
+
+    "Outside India EEZ"
+
+The current API does not separately return:
+    "Land"
+
+Use:
+    water_depth_m == 0
+
+as an additional indication that the point is treated as land by the GEBCO
+raster.
+
+Recommended future improvement:
+    Add an explicit:
+        location_type: "land" | "water"
+
+
+3. COAST DISTANCE IS NOT LEGAL BASELINE DISTANCE
+------------------------------------------------
+coast_distance_km is calculated from the Natural Earth coastline.
+
+It should not be used as the legal measurement for:
+    12 NM
+    24 NM
+    200 NM
+
+The maritime-zone shapefiles are used for that classification.
+
+
+4. nearest_maritime_boundary_km NAME IS BROAD
+----------------------------------------------
+Current implementation specifically measures distance to India's EEZ boundary.
+
+Recommended name:
+    nearest_india_eez_boundary_km
+
+
+5. GEBCO DEPTH
+--------------
+Depth is raster-derived.
+
+Land cells are returned as:
+    0
+
+The value should not be interpreted as a live bathymetric observation.
+
+
+6. PROTECTED AREA DATA IS LOCAL
+-------------------------------
+Protected-area results depend on the WDPA shapefiles currently installed in:
+    data/protected_areas/
+
+
+===================================================
+12. VERIFIED TEST RESULTS
+===================================================
+
+The API was tested with 20 locations.
+
+All 20 requests succeeded.
+Failed requests:
+    0
+
+Observed classifications:
+
+Outside India EEZ:
+    11
+
+Territorial Waters:
+    2
+
+Contiguous Zone:
+    4
+
+EEZ:
+    3
+
+Important confirmed example:
+
+Coordinate:
+    18.8, 72.5
+
+Returned:
+    Contiguous Zone
+    India
+    24 NM
+    zone_id 49426
+    water_depth_m 34
+
+This confirms that the 24 NM polygon branch is functioning.
+
+Another confirmed example:
+
+Coordinate:
+    18.5, 71.5
+
+Returned:
+    EEZ
+    India
+    200 NM
+    zone_id 8480
+    water_depth_m 83
+
+This confirms that the EEZ branch is functioning.
+
+Control example:
+
+Coordinate:
+    5.9, 80.27
+
+Returned:
+    Outside India EEZ
+
+This is expected for the India-only maritime classification.
+
+
+===================================================
+13. ERROR HANDLING
+===================================================
+
+HTTP 400:
+    Invalid/missing coordinates.
+
+HTTP 500:
+    Internal GIS/data error.
+
+Typical causes:
+    - missing shapefile
+    - missing GEBCO GeoTIFF
+    - invalid JSON port dataset
+    - malformed GIS geometry
+    - runtime dependency problem
+
+404:
+    Unknown route.
+
+The GIS server logs errors to the terminal.
+
+
+===================================================
+14. DEPENDENCIES
+===================================================
+
+Main Node.js dependencies used by the GIS service:
+
+    express
+    cors
+    shapefile
+    geotiff
+    @turf/turf
+
+The service is implemented in JavaScript/CommonJS.
+
+
+===================================================
+15. FILE RESPONSIBILITIES
+===================================================
+
+gisServer.js
+------------
+Responsibilities:
+    - start Express server
+    - expose /api/gis
+    - validate query parameters
+    - call GIS service
+    - call fishing-zone service
+    - combine results
+    - return JSON
+
+
+gisService.js
+-------------
+Responsibilities:
+    - coastline loading
+    - coast-distance calculation
+    - GEBCO loading
+    - water-depth calculation
+    - marine protected-area call
+    - maritime-boundary call
+    - nearest-port calculation
+    - final GIS object construction
+
+
+fishingZone.js
+--------------
+Responsibilities:
+    - load India 12 NM shapefile
+    - load India 24 NM shapefile
+    - load India EEZ shapefile
+    - point-in-polygon testing
+    - classify fishing/maritime zone
+
+
+marineGis.js
+------------
+Responsibilities:
+    - load WDPA protected-area parts
+    - identify marine/coastal areas
+    - point-in-polygon test
+    - nearest protected-area boundary
+    - protected-area metadata
+
+
+maritimeBoundary.js
+-------------------
+Responsibilities:
+    - load India EEZ
+    - convert EEZ polygons to boundary lines
+    - calculate nearest India EEZ boundary distance
+
+
+===================================================
+16. HOW ANOTHER DEVELOPER SHOULD USE THE API
+===================================================
+
+Example JavaScript:
+
+    const response = await fetch(
+        "http://localhost:3005/api/gis?latitude=18.8&longitude=72.5"
+    );
+
+    const data = await response.json();
+
+    if (!data.success) {
+        console.error(data.error);
+        return;
+    }
+
+    const gis = data.gis;
+
+    console.log(gis.water_depth_m);
+    console.log(gis.coast_distance_km);
+    console.log(gis.fishing_zone.zone);
+    console.log(gis.inside_marine_protected_area);
+    console.log(gis.nearest_port);
+
+
+Recommended frontend interpretation:
+
+    gis.water_depth_m
+        -> water/depth display
+
+    gis.coast_distance_km
+        -> distance from coast
+
+    gis.fishing_zone
+        -> maritime-zone display
+
+    gis.inside_marine_protected_area
+        -> protected-area warning
+
+    gis.nearest_marine_protected_area
+        -> nearby protected-area information
+
+    gis.nearest_port
+        -> nearest port
+
+    gis.nearest_restricted_zone_km
+        -> DO NOT rely on this yet; currently null
+
+    gis.inside_restricted_zone
+        -> DO NOT rely on this yet; currently null
+
+
+===================================================
+17. RECOMMENDED NEXT GIS FEATURES
+===================================================
+
+Priority 1:
+    Implement restricted/prohibited fishing zones.
+
+Priority 2:
+    Add explicit land/water classification.
+
+Priority 3:
+    Rename nearest_maritime_boundary_km to
+    nearest_india_eez_boundary_km.
+
+Priority 4:
+    Add country-aware maritime boundaries if ORCA needs to operate outside
+    Indian jurisdiction.
+
+Priority 5:
+    Add dynamic/seasonal fishing restrictions.
+
+Priority 6:
+    Connect GIS results to the ORCA Risk and Decision agents.
+
+
+===================================================
+18. QUICK REFERENCE
+===================================================
+
+Endpoint:
+    GET /api/gis?latitude=<LAT>&longitude=<LON>
+
+Input:
+    latitude
+    longitude
+
+Output:
+    coast_distance_km
+    water_depth_m
+    nearest_restricted_zone_km
+    inside_restricted_zone
+    inside_marine_protected_area
+    nearest_marine_protected_area_km
+    nearest_marine_protected_area
+    nearest_maritime_boundary_km
+    nearest_port_km
+    fishing_zone
+    location_valid
+    nearest_port
+
+Fishing-zone hierarchy:
+    12 NM -> Territorial Waters
+    24 NM -> Contiguous Zone
+    200 NM -> EEZ
+    otherwise -> Outside India EEZ
+
+Currently unimplemented:
+    restricted zones
+    country-aware foreign maritime zones
+    legal fishing permission
+    seasonal closures
+    dynamic restrictions
+    reverse-geocoded location name
+    
+######
+The documentation is based directly on the current gisServer.js, gisService.js, fishingZone.js, marineGis.js, and maritimeBoundary.js implementations. For example, the server exposes /api/gis, validates latitude/longitude, and combines getGISData() with getFishingZone().
+
+The maritime-zone documentation reflects the actual implementation: 12 NM → 24 NM → EEZ, using polygon containment rather than estimating the zone from coastline distance.
+
+One particularly important handoff note is included: nearest_maritime_boundary_km currently means nearest India EEZ boundary, because maritimeBoundary.js loads india_eez.shp specifically.
+
+######3
+===================================================
+19. SOURCE CODE FILES
+===================================================
+
+gisServer.js
+gisService.js
+fishingZone.js
+marineGis.js
+maritimeBoundary.js
+
+These files together implement the current ORCA GIS API.

@@ -1,0 +1,98 @@
+[
+  {
+    "port_id": 1,
+    "name": "Visakhapatnam Port",
+    "state": "Andhra Pradesh",
+    "port_type": "Major Port",
+    "latitude": 17.6868,
+    "longitude": 83.2185
+  },
+  {
+    "port_id": 2,
+    "name": "Paradip Port",
+    "state": "Odisha",
+    "port_type": "Major Port",
+    "latitude": 20.2669,
+    "longitude": 86.7018
+  },
+  {
+    "port_id": 3,
+    "name": "Kolkata Port",
+    "state": "West Bengal",
+    "port_type": "Major Port",
+    "latitude": 22.5726,
+    "longitude": 88.3639
+  },
+  {
+    "port_id": 4,
+    "name": "Mumbai Port",
+    "state": "Maharashtra",
+    "port_type": "Major Port",
+    "latitude": 18.949,
+    "longitude": 72.844
+  },
+  {
+    "port_id": 5,
+    "name": "Jawaharlal Nehru Port",
+    "state": "Maharashtra",
+    "port_type": "Major Port",
+    "latitude": 18.9496,
+    "longitude": 72.95
+  },
+  {
+    "port_id": 6,
+    "name": "Mormugao Port",
+    "state": "Goa",
+    "port_type": "Major Port",
+    "latitude": 15.415,
+    "longitude": 73.8
+  },
+  {
+    "port_id": 7,
+    "name": "New Mangalore Port",
+    "state": "Karnataka",
+    "port_type": "Major Port",
+    "latitude": 12.9188,
+    "longitude": 74.856
+  },
+  {
+    "port_id": 8,
+    "name": "Cochin Port",
+    "state": "Kerala",
+    "port_type": "Major Port",
+    "latitude": 9.9667,
+    "longitude": 76.2667
+  },
+  {
+    "port_id": 9,
+    "name": "V.O. Chidambaranar Port",
+    "state": "Tamil Nadu",
+    "port_type": "Major Port",
+    "latitude": 8.8053,
+    "longitude": 78.1367
+  },
+  {
+    "port_id": 10,
+    "name": "Chennai Port",
+    "state": "Tamil Nadu",
+    "port_type": "Major Port",
+    "latitude": 13.0827,
+    "longitude": 80.2707
+  },
+  {
+    "port_id": 11,
+    "name": "Kamarajar Port",
+    "state": "Tamil Nadu",
+    "port_type": "Major Port",
+    "latitude": 13.247,
+    "longitude": 80.335
+  },
+  {
+    "port_id": 12,
+    "name": "Syama Prasad Mookerjee Port",
+    "state": "West Bengal",
+    "port_type": "Major Port",
+    "latitude": 22.55,
+    "longitude": 88.3
+  }
+]
