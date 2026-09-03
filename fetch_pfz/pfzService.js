@@ -319,7 +319,7 @@ async function discoverSectorIds(page) {
     await page.goto(
         INCOIS_HOME,
         {
-            waitUntil: "networkidle2",
+            waitUntil: "domcontentloaded",
             timeout: 60000
         }
     );
@@ -510,7 +510,7 @@ async function fetchSector(
     await page.goto(
         url,
         {
-            waitUntil: "networkidle2",
+            waitUntil: "domcontentloaded",
             timeout: 60000
         }
     );
