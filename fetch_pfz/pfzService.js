@@ -1,4 +1,5 @@
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-core");
+const chromium = require("@sparticuz/chromium");
 
 const INCOIS_HOME =
     "https://www.incois.gov.in/MarineFisheries/" +
@@ -855,18 +856,64 @@ async function getPFZData(
 
         // ----------------------------------------------------
         // Start Chrome
+        //
+        // Render sets RENDER=true automatically. On Render we
+        // use the lightweight @sparticuz/chromium build. When
+        // running locally (Mac/Windows/Linux dev machine), we
+        // use the system-installed Chrome instead, since the
+        // sparticuz binary only runs on Linux.
         // ----------------------------------------------------
+
+        const isRender =
+            !!process.env.RENDER;
+
+        let executablePath;
+        let launchArgs;
+
+        if (isRender) {
+
+            executablePath =
+                await chromium.executablePath();
+
+            launchArgs = [
+                ...chromium.args,
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--single-process",
+                "--disable-gpu"
+            ];
+
+        } else {
+
+            executablePath =
+                process.platform === "darwin"
+                    ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+                    : process.platform === "win32"
+                        ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                        : "/usr/bin/google-chrome";
+
+            launchArgs = [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage"
+            ];
+        }
+
 
         browser =
             await puppeteer.launch({
 
+                executablePath,
+
+                args: launchArgs,
+
                 headless: true,
 
-                args: [
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage"
-                ]
+                defaultViewport:
+                    isRender
+                        ? chromium.defaultViewport
+                        : null,
             });
 
 
